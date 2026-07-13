@@ -1,0 +1,7 @@
+import {NavLink,Outlet,useNavigate} from "react-router-dom";
+import {BarChart3,FileText,LayoutDashboard,LogOut,Users} from "lucide-react";
+import {useAuth} from "../auth/AuthContext";
+
+const links=[[LayoutDashboard,"Dashboard","/admin/dashboard"],[Users,"Users","/admin/users"],[FileText,"Forms","/admin/forms"],[BarChart3,"Analytics","/admin/analytics"]];
+
+export default function AdminLayout(){const {user,logout}=useAuth();const navigate=useNavigate();const signOut=async()=>{await logout();navigate("/admin/login",{replace:true})};const initials=user?.name?.split(" ").map(part=>part[0]).join("").slice(0,2).toUpperCase();return <div className="app-layout admin-layout"><aside className="sidebar admin-sidebar"><div className="sidebar-brand"><span className="brand-mark">F</span><div><strong>FormFlow</strong><small>Control Center</small></div></div><nav aria-label="Admin navigation">{links.map(([Icon,label,to])=><NavLink to={to} key={to}><span className="sidebar-nav-icon" aria-hidden="true"><Icon/></span><span>{label}</span></NavLink>)}</nav><div className="admin-sidebar-footer"><div className="admin-identity"><span className="user-avatar">{initials||"PO"}</span><div className="admin-user-copy"><strong>{user?.name||"Platform Owner"}</strong></div></div><button className="admin-logout" onClick={signOut}><LogOut aria-hidden="true"/> Logout</button></div></aside><div className="layout-main admin-main"><Outlet/></div></div>}

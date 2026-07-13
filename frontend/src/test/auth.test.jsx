@@ -1,0 +1,2 @@
+import {render,screen} from '@testing-library/react';import {MemoryRouter} from 'react-router-dom';import {expect,test} from 'vitest';import Login from '../pages/Login';import {AuthProvider} from '../auth/AuthContext';
+test('renders the login flow',()=>{render(<MemoryRouter><AuthProvider><Login/></AuthProvider></MemoryRouter>);expect(screen.getByRole('heading',{name:/log in to your account/i})).toBeInTheDocument();expect(screen.getByLabelText(/email/i)).toBeInTheDocument();expect(screen.getByRole('button',{name:/show/i})).toBeInTheDocument()});
