@@ -7,12 +7,13 @@ from reportlab.pdfgen import canvas
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
 from sqlalchemy import asc, desc, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
 from app.core.dependencies import get_current_user
 from app.db.database import get_db
 from app.models.audit_log import AuditLog
+from app.models.conditional_rule import ConditionalRule
 from app.models.field import Field
 from app.models.field_option import FieldOption
 from app.models.form import Form
@@ -23,12 +24,28 @@ from app.models.user import User, UserRole
 from app.models.validation_rule import ValidationRule
 from app.schemas.field import FieldCreate, FieldOptionCreate, FieldOptionUpdate, FieldReorderRequest, OptionReorderRequest, FieldUpdate
 from app.schemas.form import FormCreate, FormUpdate
+from app.schemas.conditional_rule import ConditionalRuleCreate, ConditionalRuleResponse, ConditionalRuleUpdate
 from app.schemas.response import FormResponse
 from app.schemas.validation_rule import ValidationRuleCreate, ValidationRuleUpdate
 
 router = APIRouter(prefix="/forms", tags=["Forms"])
 OPTION_FIELD_TYPES = {"dropdown", "radio", "multi_select", "checkbox_group"}
 SUPPORTED_FILE_EXTENSIONS = {"pdf", "docx", "png", "jpg", "jpeg"}
+EMPTY_CONDITION_OPERATORS = {"is_empty", "is_not_empty"}
+CONDITIONAL_OPERATORS_BY_FIELD_TYPE = {
+    "text": {"equals", "not_equals", "contains", "in", "not_in", "is_empty", "is_not_empty"},
+    "email": {"equals", "not_equals", "contains", "in", "not_in", "is_empty", "is_not_empty"},
+    "textarea": {"equals", "not_equals", "contains", "in", "not_in", "is_empty", "is_not_empty"},
+    "number": {"equals", "not_equals", "greater_than", "less_than", "in", "not_in", "is_empty", "is_not_empty"},
+    "date": {"equals", "not_equals", "greater_than", "less_than", "in", "not_in", "is_empty", "is_not_empty"},
+    "rating": {"equals", "not_equals", "greater_than", "less_than", "in", "not_in", "is_empty", "is_not_empty"},
+    "checkbox": {"equals", "not_equals", "in", "not_in", "is_empty", "is_not_empty"},
+    "dropdown": {"equals", "not_equals", "contains", "in", "not_in", "is_empty", "is_not_empty"},
+    "radio": {"equals", "not_equals", "contains", "in", "not_in", "is_empty", "is_not_empty"},
+    "multi_select": {"equals", "not_equals", "contains", "in", "not_in", "is_empty", "is_not_empty"},
+    "checkbox_group": {"equals", "not_equals", "contains", "in", "not_in", "is_empty", "is_not_empty"},
+    "file": {"is_empty", "is_not_empty"},
+}
 
 def audit(db, user, action, kind, entity_id, details=None):
     db.add(AuditLog(user_id=user.id, action=action, entity_type=kind, entity_id=entity_id, details=details or {}))
@@ -45,13 +62,133 @@ def field_for(db, form_id, field_id, user):
     if not field: raise HTTPException(404, "Field not found")
     return field
 
+def conditional_rule_for(db, form_id, rule_id, user):
+    owned_form(db, form_id, user)
+    rule = db.query(ConditionalRule).filter_by(id=rule_id, form_id=form_id).first()
+    if not rule: raise HTTPException(404, "Conditional rule not found")
+    return rule
+
+def normalize_comparison(operator, comparison_value):
+    if operator in EMPTY_CONDITION_OPERATORS: return None
+    return comparison_value.strip() if isinstance(comparison_value, str) else comparison_value
+
+def validate_conditional_payload(db: Session, form: Form, payload, existing_rule_id: int | None = None):
+    trigger = db.query(Field).filter_by(id=payload.trigger_field_id, form_id=form.id).first()
+    target = db.query(Field).filter_by(id=payload.target_field_id, form_id=form.id).first()
+    if not trigger: raise HTTPException(422, detail={"message":"Trigger field must belong to this form","fields":{"trigger_field_id":"Invalid trigger field"}})
+    if not target: raise HTTPException(422, detail={"message":"Target field must belong to this form","fields":{"target_field_id":"Invalid target field"}})
+    if trigger.id == target.id: raise HTTPException(422, detail={"message":"Trigger and target fields must be different","fields":{"target_field_id":"Choose a different target field"}})
+    allowed = CONDITIONAL_OPERATORS_BY_FIELD_TYPE.get(trigger.field_type, EMPTY_CONDITION_OPERATORS)
+    if payload.operator not in allowed:
+        raise HTTPException(422, detail={"message":"Operator is not valid for the trigger field type","fields":{"operator":f"{payload.operator} cannot be used with {trigger.field_type}"}})
+    comparison_value = normalize_comparison(payload.operator, payload.comparison_value)
+    if payload.operator not in EMPTY_CONDITION_OPERATORS and (comparison_value is None or str(comparison_value) == ""):
+        raise HTTPException(422, detail={"message":"Comparison value is required","fields":{"comparison_value":"Enter a comparison value"}})
+    duplicate = db.query(ConditionalRule).filter(
+        ConditionalRule.form_id == form.id,
+        ConditionalRule.trigger_field_id == trigger.id,
+        ConditionalRule.operator == payload.operator,
+        ConditionalRule.comparison_value.is_(None) if comparison_value is None else ConditionalRule.comparison_value == comparison_value,
+        ConditionalRule.target_field_id == target.id,
+        ConditionalRule.action == payload.action,
+    )
+    if existing_rule_id is not None: duplicate = duplicate.filter(ConditionalRule.id != existing_rule_id)
+    if duplicate.first(): raise HTTPException(409, "An identical conditional rule already exists")
+    return trigger, target, comparison_value
+
 def snapshot(form: Form) -> dict:
     return {"id": form.id, "title": form.title, "description": form.description, "fields": [
         {"id": f.id, "label": f.label, "field_type": f.field_type, "required": f.required, "placeholder": f.placeholder,
          "help_text": f.help_text, "display_order": f.display_order,
          "options": [{"id": o.id, "option_label": o.option_label, "option_value": o.option_value, "display_order": o.display_order} for o in f.options],
          "validation_rules": [{"id": r.id, "rule_type": r.rule_type, "rule_value": r.rule_value, "error_message": r.error_message} for r in f.validation_rules]}
-        for f in form.fields]}
+        for f in form.fields],
+        "conditional_rules": [
+            {"id": r.id, "form_id": r.form_id, "trigger_field_id": r.trigger_field_id, "operator": r.operator,
+             "comparison_value": r.comparison_value, "target_field_id": r.target_field_id, "action": r.action,
+             "created_at": r.created_at.isoformat() if r.created_at else None, "updated_at": r.updated_at.isoformat() if r.updated_at else None}
+            for r in db_session_query_rules(form)
+        ]}
+
+def canonical_text(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text != "" else None
+
+def canonical_snapshot(data: dict) -> dict:
+    fields = sorted(data.get("fields", []), key=lambda item: (item.get("display_order") or 0, item.get("id") or 0))
+    field_index = {field.get("id"): index + 1 for index, field in enumerate(fields)}
+    canonical_fields = []
+    for index, field in enumerate(fields, start=1):
+        options = sorted(field.get("options", []), key=lambda item: (item.get("display_order") or 0, item.get("id") or 0))
+        rules = sorted(field.get("validation_rules", []), key=lambda item: (item.get("rule_type") or "", canonical_text(item.get("rule_value")) or "", canonical_text(item.get("error_message")) or ""))
+        canonical_fields.append({
+            "label": canonical_text(field.get("label")),
+            "field_type": canonical_text(field.get("field_type")),
+            "required": bool(field.get("required")),
+            "display_order": index,
+            "placeholder": canonical_text(field.get("placeholder")),
+            "help_text": canonical_text(field.get("help_text")),
+            "options": [
+                {
+                    "option_label": canonical_text(option.get("option_label")),
+                    "option_value": canonical_text(option.get("option_value")),
+                    "display_order": option_index,
+                }
+                for option_index, option in enumerate(options, start=1)
+            ],
+            "validation_rules": [
+                {
+                    "rule_type": canonical_text(rule.get("rule_type")),
+                    "rule_value": canonical_text(rule.get("rule_value")),
+                    "error_message": canonical_text(rule.get("error_message")),
+                }
+                for rule in rules
+            ],
+        })
+    conditional_rules = []
+    for rule in data.get("conditional_rules", []):
+        trigger = field_index.get(rule.get("trigger_field_id"))
+        target = field_index.get(rule.get("target_field_id"))
+        if not trigger or not target:
+            continue
+        conditional_rules.append({
+            "trigger_field": trigger,
+            "operator": canonical_text(rule.get("operator")),
+            "comparison_value": canonical_text(rule.get("comparison_value")),
+            "target_field": target,
+            "action": canonical_text(rule.get("action")),
+        })
+    conditional_rules.sort(key=lambda item: (item["trigger_field"], item["operator"] or "", item["comparison_value"] or "", item["target_field"], item["action"] or ""))
+    return {
+        "title": canonical_text(data.get("title")),
+        "description": canonical_text(data.get("description")),
+        "fields": canonical_fields,
+        "conditional_rules": conditional_rules,
+    }
+
+def db_session_query_rules(form: Form):
+    session = object_session(form)
+    if not session:
+        return []
+    valid_ids = {field.id for field in form.fields}
+    return session.query(ConditionalRule).filter(
+        ConditionalRule.form_id == form.id,
+        ConditionalRule.trigger_field_id.in_(valid_ids),
+        ConditionalRule.target_field_id.in_(valid_ids),
+    ).order_by(ConditionalRule.id.asc()).all()
+
+def cleanup_orphaned_conditional_rules(db: Session, form: Form):
+    valid_ids = {field.id for field in form.fields}
+    rules = db.query(ConditionalRule).filter_by(form_id=form.id).all()
+    orphaned = [rule for rule in rules if rule.trigger_field_id not in valid_ids or rule.target_field_id not in valid_ids]
+    orphaned_ids = {rule.id for rule in orphaned}
+    for rule in orphaned:
+        db.delete(rule)
+    if orphaned:
+        db.commit()
+    return [rule for rule in rules if rule.id not in orphaned_ids]
 
 def mark_draft(form):
     if form.status == "published": form.status = "draft"
@@ -263,6 +400,52 @@ def update_form(form_id: int, payload: FormUpdate, db: Session = Depends(get_db)
 def delete_form(form_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     form = owned_form(db, form_id, user); form.is_deleted = True; form.updated_by = user.id; audit(db, user, "form.deleted", "form", form.id); db.commit(); return None
 
+@router.post("/{form_id}/rules", response_model=ConditionalRuleResponse, status_code=status.HTTP_201_CREATED)
+def create_conditional_rule(form_id: int, payload: ConditionalRuleCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    form = owned_form(db, form_id, user)
+    _, _, comparison_value = validate_conditional_payload(db, form, payload)
+    rule = ConditionalRule(
+        form_id=form.id,
+        trigger_field_id=payload.trigger_field_id,
+        operator=payload.operator,
+        comparison_value=comparison_value,
+        target_field_id=payload.target_field_id,
+        action=payload.action,
+    )
+    db.add(rule); mark_draft(form); db.commit(); db.refresh(rule); return rule
+
+@router.get("/{form_id}/rules", response_model=list[ConditionalRuleResponse])
+def get_conditional_rules(form_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    form = owned_form(db, form_id, user)
+    cleanup_orphaned_conditional_rules(db, form)
+    return db.query(ConditionalRule).filter_by(form_id=form_id).order_by(ConditionalRule.created_at.desc(), ConditionalRule.id.desc()).all()
+
+@router.patch("/{form_id}/rules/{rule_id}", response_model=ConditionalRuleResponse)
+def update_conditional_rule(form_id: int, rule_id: int, payload: ConditionalRuleUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    rule = conditional_rule_for(db, form_id, rule_id, user)
+    form = owned_form(db, form_id, user)
+    merged = ConditionalRuleCreate(
+        trigger_field_id=payload.trigger_field_id if payload.trigger_field_id is not None else rule.trigger_field_id,
+        operator=payload.operator if payload.operator is not None else rule.operator,
+        comparison_value=payload.comparison_value if "comparison_value" in payload.model_fields_set else rule.comparison_value,
+        target_field_id=payload.target_field_id if payload.target_field_id is not None else rule.target_field_id,
+        action=payload.action if payload.action is not None else rule.action,
+    )
+    _, _, comparison_value = validate_conditional_payload(db, form, merged, existing_rule_id=rule.id)
+    rule.trigger_field_id = merged.trigger_field_id
+    rule.operator = merged.operator
+    rule.comparison_value = comparison_value
+    rule.target_field_id = merged.target_field_id
+    rule.action = merged.action
+    rule.updated_at = datetime.utcnow()
+    mark_draft(form); db.commit(); db.refresh(rule); return rule
+
+@router.delete("/{form_id}/rules/{rule_id}", status_code=204)
+def delete_conditional_rule(form_id: int, rule_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    rule = conditional_rule_for(db, form_id, rule_id, user)
+    form = owned_form(db, form_id, user)
+    mark_draft(form); db.delete(rule); db.commit(); return None
+
 @router.post("/{form_id}/fields", status_code=201)
 def add_field(form_id: int, payload: FieldCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     form = owned_form(db, form_id, user); field = Field(form_id=form.id, **payload.model_dump()); db.add(field); mark_draft(form); db.commit(); db.refresh(field); return field
@@ -284,9 +467,20 @@ def update_field(form_id: int, field_id: int, payload: FieldUpdate, db: Session 
     for key, value in data.items(): setattr(field, key, value)
     mark_draft(field.form); db.commit(); db.refresh(field); return field
 
-@router.delete("/{form_id}/fields/{field_id}", status_code=204)
+@router.delete("/{form_id}/fields/{field_id}")
 def delete_field(form_id: int, field_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    field = field_for(db, form_id, field_id, user); mark_draft(field.form); db.delete(field); db.commit(); return None
+    field = field_for(db, form_id, field_id, user)
+    dependent_rules = db.query(ConditionalRule).filter(
+        ConditionalRule.form_id == form_id,
+        or_(ConditionalRule.trigger_field_id == field_id, ConditionalRule.target_field_id == field_id),
+    ).all()
+    deleted_rule_count = len(dependent_rules)
+    mark_draft(field.form)
+    for rule in dependent_rules:
+        db.delete(rule)
+    db.delete(field)
+    db.commit()
+    return {"message": "Field deleted successfully", "deleted_rule_count": deleted_rule_count}
 
 @router.post("/{form_id}/fields/{field_id}/options", status_code=201)
 def add_option(form_id: int, field_id: int, payload: FieldOptionCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -345,13 +539,18 @@ def delete_rule(field_id: int, rule_id: int, db: Session = Depends(get_db), user
     mark_draft(field.form); db.delete(rule); db.commit(); return None
 
 @router.post("/{form_id}/publish", status_code=201)
-def publish(form_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def publish(form_id: int, response: Response, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     form = owned_form(db, form_id, user)
     validate_publishable(form)
+    draft_snapshot = snapshot(form)
+    latest_published = db.query(FormVersion).filter_by(form_id=form.id, status="published").order_by(FormVersion.version_number.desc()).first()
     latest = db.query(FormVersion).filter_by(form_id=form.id).order_by(FormVersion.version_number.desc()).first()
-    version = FormVersion(form_id=form.id, version_number=(latest.version_number + 1 if latest else 1), status="published", snapshot=snapshot(form))
+    if latest_published and canonical_snapshot(draft_snapshot) == canonical_snapshot(latest_published.snapshot or {}):
+        response.status_code = 200
+        return {"published": False, "unchanged": True, "message": "No changes to publish. This form is already up to date.", "form_id": form.id, "version_id": latest_published.id, "version_number": latest_published.version_number, "status": latest_published.status}
+    version = FormVersion(form_id=form.id, version_number=(latest.version_number + 1 if latest else 1), status="published", snapshot=draft_snapshot)
     form.status = "published"; db.add(version); db.flush(); audit(db,user,"form.published","form",form.id,{"version":version.version_number}); db.commit(); db.refresh(version)
-    return {"message":"Form published successfully","form_id":form.id,"version_id":version.id,"version_number":version.version_number,"status":version.status}
+    return {"published": True, "unchanged": False, "message":"Form published successfully","form_id":form.id,"version_id":version.id,"version_number":version.version_number,"status":version.status}
 
 @router.get("/{form_id}/preview")
 def preview(form_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):

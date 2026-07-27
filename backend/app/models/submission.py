@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db.database import Base
@@ -8,12 +8,16 @@ from app.db.database import Base
 
 class FormSubmission(Base):
     __tablename__ = "form_submissions"
+    __table_args__ = (
+        UniqueConstraint("form_version_id", "idempotency_key", name="uq_submission_version_idempotency_key"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     form_id = Column(Integer, ForeignKey("forms.id"), nullable=False, index=True)
     form_version_id = Column(Integer, ForeignKey("form_versions.id"), nullable=False, index=True)
     submitted_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     submitter_ip = Column(Text, nullable=True)
+    idempotency_key = Column(Text, nullable=True, index=True)
     values = relationship("SubmissionValue", back_populates="submission", cascade="all, delete-orphan")
 
 

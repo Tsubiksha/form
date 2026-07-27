@@ -18,7 +18,7 @@ function MetricRow({label,value,Icon}){return <div className="insight-metric-row
 function DashboardCard({title,subtitle,Icon,children,className=""}){return <article className={`user-panel dashboard-card ${className}`}><div className="user-panel-heading"><div><h2>{title}</h2>{subtitle&&<p>{subtitle}</p>}</div>{Icon&&<Icon/>}</div>{children}</article>}
 
 export default function Dashboard(){
-  const {user}=useAuth();
+  const {user}=useAuth()||{};
   const toast=useToast();
   const [data,setData]=useState(null);
   const [error,setError]=useState("");

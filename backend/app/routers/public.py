@@ -1,8 +1,10 @@
-import json, re, uuid
+import hashlib, hmac, json, re, time, uuid
 from datetime import date, datetime
 from pathlib import Path
 from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -11,6 +13,7 @@ from app.models.form_version import FormVersion
 from app.models.share_link import ShareLink
 from app.models.submission import FormSubmission, SubmissionValue
 from app.schemas.submission import SubmissionCreate
+from app.services.conditional_logic import evaluate_conditional_rules, is_empty_value
 
 router = APIRouter(prefix="/public/forms", tags=["Public Forms"])
 legacy_router = APIRouter(prefix="/forms/public/forms", tags=["Public Forms"])
@@ -23,6 +26,23 @@ def link_version(token, db):
     return link, version
 
 SUPPORTED_FILE_EXTENSIONS = {"pdf", "docx", "png", "jpg", "jpeg"}
+
+def signed_upload_url(token, form_id, stored_name, expires=None):
+    expires = int(expires or time.time() + 3600)
+    safe_name = Path(stored_name).name
+    message = f"{token}:{form_id}:{safe_name}:{expires}".encode()
+    signature = hmac.new(settings.jwt_secret.encode(), message, hashlib.sha256).hexdigest()
+    return f"/public/forms/{token}/uploads/{safe_name}?expires={expires}&signature={signature}"
+
+def verify_upload_signature(token, form_id, stored_name, expires, signature):
+    try:
+        expires = int(expires)
+    except (TypeError, ValueError):
+        return False
+    if expires < int(time.time()):
+        return False
+    expected = signed_upload_url(token, form_id, stored_name, expires).split("signature=", 1)[1]
+    return hmac.compare_digest(expected, signature or "")
 
 def file_rules(field):
     rules = {r["rule_type"]: r for r in field.get("validation_rules", [])}
@@ -56,13 +76,42 @@ def rating_bounds(field):
     if maximum < minimum: maximum = minimum
     return minimum, maximum
 
+def submission_response(submission):
+    return {
+        "id": submission.id,
+        "response_id": submission.id,
+        "message": "Response submitted successfully",
+        "submitted_at": submission.submitted_at,
+        "timestamp": submission.submitted_at,
+        "summary": {
+            "form_id": submission.form_id,
+            "form_version_id": submission.form_version_id,
+            "stored_values": len(submission.values or []),
+        },
+    }
+
+def idempotency_key(request: Request):
+    value = request.headers.get("Idempotency-Key") or request.headers.get("X-Idempotency-Key")
+    return value.strip()[:200] if value and value.strip() else None
+
+def existing_idempotent_submission(db, version_id, key):
+    if not key: return None
+    return db.query(FormSubmission).filter_by(form_version_id=version_id, idempotency_key=key).first()
+
 def validate(snapshot, values):
     errors = {}
+    rules = snapshot.get("conditional_rules", [])
+    states = evaluate_conditional_rules(snapshot.get("fields", []), rules, values).get("field_states", {})
+    cleaned = {}
     for field in snapshot.get("fields", []):
         key, value = str(field["id"]), values.get(str(field["id"]), values.get(field["id"]))
+        state = states.get(key, {"visible": True, "required": bool(field.get("required"))})
+        if not state.get("visible", True):
+            if not is_empty_value(value): errors[key] = "This field is not currently applicable."
+            continue
         rules = {r["rule_type"]: r for r in field.get("validation_rules", [])}
-        required = field.get("required") or "required" in rules
-        empty = value is None or value == "" or value == [] or value is False
+        required = bool(state.get("required"))
+        empty = is_empty_value(value) or (field.get("field_type") == "checkbox" and value is False)
         if required and empty: errors[key] = rules.get("required", {}).get("error_message") or f'{field["label"]} is required'; continue
         if empty: continue
         text = str(value)
@@ -79,6 +128,12 @@ def validate(snapshot, values):
                     raise ValueError("Invalid regex validation pattern")
             if field["field_type"] == "number":
                 number=float(value)
+                integer_rule = rules.get("integer")
+                decimal_rule = rules.get("decimal")
+                integer_enabled = integer_rule and str(integer_rule.get("rule_value", "true")).lower() not in {"false", "0", "no"}
+                decimal_enabled = decimal_rule and str(decimal_rule.get("rule_value", "true")).lower() not in {"false", "0", "no"}
+                if integer_enabled and not number.is_integer(): raise ValueError("Enter a whole number")
+                if decimal_enabled and not re.fullmatch(r"-?\d+(\.\d+)?", text.strip()): raise ValueError("Enter a valid decimal number")
                 if "min_value" in rules and number<float(rules["min_value"]["rule_value"]): raise ValueError(f'Minimum value is {rules["min_value"]["rule_value"]}')
                 if "max_value" in rules and number>float(rules["max_value"]["rule_value"]): raise ValueError(f'Maximum value is {rules["max_value"]["rule_value"]}')
             if field["field_type"] == "date":
@@ -96,26 +151,50 @@ def validate(snapshot, values):
             if allowed:
                 selected=value if isinstance(value,list) else [value]
                 if any(str(v) not in allowed for v in selected): raise ValueError("Invalid option")
+            cleaned[key] = value
         except (ValueError, TypeError) as exc: errors[key] = str(exc)
     if errors: raise HTTPException(422, detail={"message":"Submission validation failed","fields":errors})
+    return cleaned
+
+def store_submission(db, link, version, values, request, key=None):
+    if key:
+        existing = existing_idempotent_submission(db, version.id, key)
+        if existing: return existing
+    submission=FormSubmission(form_id=link.form_id,form_version_id=version.id,submitter_ip=request.client.host if request.client else None,idempotency_key=key)
+    db.add(submission); db.flush()
+    known={str(f["id"]) for f in version.snapshot.get("fields",[])}
+    for key_name,value in values.items():
+        if str(key_name) in known: db.add(SubmissionValue(submission_id=submission.id,field_id=int(key_name),value=json.dumps(value)))
+    return submission
 
 def get_public(token:str,db:Session=Depends(get_db)):
     _,version=link_version(token,db); return version.snapshot
 
 def submit_public(token:str,payload:SubmissionCreate,request:Request,db:Session=Depends(get_db)):
-    link,version=link_version(token,db); validate(version.snapshot,payload.values)
-    submission=FormSubmission(form_id=link.form_id,form_version_id=version.id,submitter_ip=request.client.host if request.client else None); db.add(submission); db.flush()
-    known={str(f["id"]) for f in version.snapshot.get("fields",[])}
-    for key,value in payload.values.items():
-        if str(key) in known: db.add(SubmissionValue(submission_id=submission.id,field_id=int(key),value=json.dumps(value)))
-    db.commit(); db.refresh(submission); return {"id":submission.id,"message":"Response submitted successfully","submitted_at":submission.submitted_at}
+    link,version=link_version(token,db)
+    key=idempotency_key(request)
+    existing=existing_idempotent_submission(db,version.id,key)
+    if existing: return submission_response(existing)
+    cleaned=validate(version.snapshot,payload.values)
+    try:
+        submission=store_submission(db,link,version,cleaned,request,key)
+        db.commit(); db.refresh(submission); return submission_response(submission)
+    except IntegrityError:
+        db.rollback()
+        existing=existing_idempotent_submission(db,version.id,key)
+        if existing: return submission_response(existing)
+        raise
 
 async def submit_public_multipart(token:str,request:Request,db:Session=Depends(get_db)):
     link,version=link_version(token,db)
+    key=idempotency_key(request)
+    existing=existing_idempotent_submission(db,version.id,key)
+    if existing: return submission_response(existing)
     form_data = await request.form()
     try: values = json.loads(form_data.get("values") or "{}")
     except json.JSONDecodeError: raise HTTPException(400, "Invalid submission payload")
     snapshot = version.snapshot
+    written_files = []
     for field in snapshot.get("fields", []):
         if field.get("field_type") != "file": continue
         upload = form_data.get(f"field_{field['id']}")
@@ -134,23 +213,45 @@ async def submit_public_multipart(token:str,request:Request,db:Session=Depends(g
             "uploaded_at": datetime.utcnow().isoformat() + "Z",
             "stored_name": safe_name,
             "download_url": f"/forms/{link.form_id}/uploads/{safe_name}",
+            "signed_download_url": signed_upload_url(token, link.form_id, safe_name),
         }
         try: validate_file_value(field, metadata)
         except ValueError as exc: raise HTTPException(422, detail={"message":"Submission validation failed","fields":{str(field["id"]):str(exc)}})
         directory = Path(settings.upload_dir) / f"form_{link.form_id}"
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / safe_name).write_bytes(content)
+        path = directory / safe_name
+        path.write_bytes(content)
+        written_files.append(path)
         values[str(field["id"])] = metadata
-    validate(snapshot, values)
-    submission=FormSubmission(form_id=link.form_id,form_version_id=version.id,submitter_ip=request.client.host if request.client else None); db.add(submission); db.flush()
-    known={str(f["id"]) for f in snapshot.get("fields",[])}
-    for key,value in values.items():
-        if str(key) in known: db.add(SubmissionValue(submission_id=submission.id,field_id=int(key),value=json.dumps(value)))
-    db.commit(); db.refresh(submission); return {"id":submission.id,"message":"Response submitted successfully","submitted_at":submission.submitted_at}
+    try:
+        cleaned=validate(snapshot, values)
+        submission=store_submission(db,link,version,cleaned,request,key)
+        db.commit(); db.refresh(submission); return submission_response(submission)
+    except HTTPException:
+        for path in written_files:
+            try: path.unlink(missing_ok=True)
+            except OSError: pass
+        raise
+    except IntegrityError:
+        db.rollback()
+        existing=existing_idempotent_submission(db,version.id,key)
+        if existing: return submission_response(existing)
+        raise
 
 router.add_api_route("/{token}",get_public,methods=["GET"])
 router.add_api_route("/{token}/submit",submit_public,methods=["POST"],status_code=201)
 router.add_api_route("/{token}/submit-multipart",submit_public_multipart,methods=["POST"],status_code=201)
+
+def download_public_upload(token:str,stored_name:str,expires:str,signature:str,db:Session=Depends(get_db)):
+    link,_=link_version(token,db)
+    safe_name = Path(stored_name).name
+    if not verify_upload_signature(token, link.form_id, safe_name, expires, signature):
+        raise HTTPException(403, "Invalid or expired download link")
+    path = Path(settings.upload_dir) / f"form_{link.form_id}" / safe_name
+    if not path.exists() or not path.is_file(): raise HTTPException(404, "Uploaded file not found")
+    return FileResponse(path)
+
+router.add_api_route("/{token}/uploads/{stored_name}",download_public_upload,methods=["GET"])
 legacy_router.add_api_route("/{token}",get_public,methods=["GET"])
 legacy_router.add_api_route("/{token}/submit",submit_public,methods=["POST"],status_code=201)
 legacy_router.add_api_route("/{token}/submit-multipart",submit_public_multipart,methods=["POST"],status_code=201)

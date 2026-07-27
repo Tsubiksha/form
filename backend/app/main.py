@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.db.database import Base, engine
-from app.models import audit_log, field, field_option, form, form_version, share_link, submission, user, validation_rule
+from app.models import audit_log, conditional_rule, field, field_option, form, form_version, share_link, submission, user, validation_rule
 from app.routers.auth import router as auth_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.forms import router as forms_router
