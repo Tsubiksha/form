@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.dependencies import get_current_user
 from app.core.security import create_access_token, create_refresh_token, hash_password, hash_token, verify_password
 from app.db.database import get_db
+from app.models.audit_log import AuditLog
 from app.models.user import RefreshToken, User, UserRole
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, LogoutRequest, ProfileUpdateRequest, RegisterRequest, TokenResponse, UserResponse
 
@@ -79,3 +80,20 @@ def change_password(payload: ChangePasswordRequest, user: User = Depends(get_cur
     db.query(RefreshToken).filter(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None)).update({"revoked_at": datetime.utcnow()})
     db.commit()
     return None
+
+
+@router.get("/audit-logs")
+def get_audit_logs(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Return the last 20 audit log events for the current user."""
+    logs = db.query(AuditLog).filter(AuditLog.user_id == user.id).order_by(AuditLog.created_at.desc()).limit(20).all()
+    return [
+        {
+            "id": log.id,
+            "action": log.action,
+            "entity_type": log.entity_type,
+            "entity_id": log.entity_id,
+            "details": log.details,
+            "created_at": log.created_at,
+        }
+        for log in logs
+    ]

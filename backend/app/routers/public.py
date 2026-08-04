@@ -217,11 +217,19 @@ async def submit_public_multipart(token:str,request:Request,db:Session=Depends(g
         }
         try: validate_file_value(field, metadata)
         except ValueError as exc: raise HTTPException(422, detail={"message":"Submission validation failed","fields":{str(field["id"]):str(exc)}})
-        directory = Path(settings.upload_dir) / f"form_{link.form_id}"
-        directory.mkdir(parents=True, exist_ok=True)
-        path = directory / safe_name
-        path.write_bytes(content)
-        written_files.append(path)
+        
+        from app.services.storage import get_storage
+        storage = get_storage()
+        safe_name = storage.save(content, original_name, path_prefix=f"form_{link.form_id}")
+        
+        metadata["stored_name"] = safe_name
+        metadata["download_url"] = f"/forms/{link.form_id}/uploads/{safe_name}"
+        metadata["signed_download_url"] = signed_upload_url(token, link.form_id, safe_name)
+        
+        # Keep track of local paths if we need to rollback (for local storage)
+        if hasattr(storage, "base_dir"):
+            written_files.append(storage.base_dir / f"form_{link.form_id}" / safe_name)
+            
         values[str(field["id"])] = metadata
     try:
         cleaned=validate(snapshot, values)
@@ -238,12 +246,38 @@ async def submit_public_multipart(token:str,request:Request,db:Session=Depends(g
         if existing: return submission_response(existing)
         raise
 
-router.add_api_route("/{token}",get_public,methods=["GET"])
-router.add_api_route("/{token}/submit",submit_public,methods=["POST"],status_code=201)
-router.add_api_route("/{token}/submit-multipart",submit_public_multipart,methods=["POST"],status_code=201)
+def track_form_open(token: str, request: Request, db: Session = Depends(get_db)):
+    """
+    Day 14: Track when a user opens a form (for completion rate analytics).
+    Creates a lightweight pending record with only started_at set (no values yet).
+    Returns an open_token the frontend uses to associate the eventual submission.
+    """
+    link, version = link_version(token, db)
+    open_token = str(uuid.uuid4())
+    # Use the open_token as idempotency_key so we can update it when submitted
+    pending = FormSubmission(
+        form_id=link.form_id,
+        form_version_id=version.id,
+        started_at=datetime.utcnow(),
+        submitter_ip=request.client.host if request.client else None,
+        idempotency_key=f"__open__{open_token}",
+    )
+    try:
+        db.add(pending)
+        db.commit()
+        db.refresh(pending)
+    except Exception:
+        db.rollback()
+        pending = None
+    return {"open_token": open_token, "tracked": pending is not None}
 
-def download_public_upload(token:str,stored_name:str,expires:str,signature:str,db:Session=Depends(get_db)):
-    link,_=link_version(token,db)
+router.add_api_route("/{token}", get_public, methods=["GET"])
+router.add_api_route("/{token}/submit", submit_public, methods=["POST"], status_code=201)
+router.add_api_route("/{token}/submit-multipart", submit_public_multipart, methods=["POST"], status_code=201)
+router.add_api_route("/{token}/open", track_form_open, methods=["POST"], status_code=200)
+
+def download_public_upload(token: str, stored_name: str, expires: str, signature: str, db: Session = Depends(get_db)):
+    link, _ = link_version(token, db)
     safe_name = Path(stored_name).name
     if not verify_upload_signature(token, link.form_id, safe_name, expires, signature):
         raise HTTPException(403, "Invalid or expired download link")
@@ -251,7 +285,8 @@ def download_public_upload(token:str,stored_name:str,expires:str,signature:str,d
     if not path.exists() or not path.is_file(): raise HTTPException(404, "Uploaded file not found")
     return FileResponse(path)
 
-router.add_api_route("/{token}/uploads/{stored_name}",download_public_upload,methods=["GET"])
-legacy_router.add_api_route("/{token}",get_public,methods=["GET"])
-legacy_router.add_api_route("/{token}/submit",submit_public,methods=["POST"],status_code=201)
-legacy_router.add_api_route("/{token}/submit-multipart",submit_public_multipart,methods=["POST"],status_code=201)
+router.add_api_route("/{token}/uploads/{stored_name}", download_public_upload, methods=["GET"])
+legacy_router.add_api_route("/{token}", get_public, methods=["GET"])
+legacy_router.add_api_route("/{token}/submit", submit_public, methods=["POST"], status_code=201)
+legacy_router.add_api_route("/{token}/submit-multipart", submit_public_multipart, methods=["POST"], status_code=201)
+

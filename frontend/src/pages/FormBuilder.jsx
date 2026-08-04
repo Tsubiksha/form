@@ -1,11 +1,12 @@
-﻿import {useCallback,useEffect,useMemo,useRef,useState} from "react";
+import { useTranslation } from "react-i18next";
+import {useCallback,useEffect,useMemo,useRef,useState} from "react";
 import {createPortal} from "react-dom";
 import {Link,useNavigate,useParams} from "react-router-dom";
 import API from "../services/api";
 import {DndContext,KeyboardSensor,PointerSensor,closestCenter,useSensor,useSensors} from "@dnd-kit/core";
 import {SortableContext,arrayMove,sortableKeyboardCoordinates,useSortable,verticalListSortingStrategy} from "@dnd-kit/sortable";
 import {CSS} from "@dnd-kit/utilities";
-import {AtSign,CalendarDays,CheckSquare,ChevronDown,ChevronUp,FileText,GitBranch,GripVertical,Hash,ListChecks,ListTree,Mail,MoreHorizontal,PanelTop,Plus,Settings,Share2,Star,Trash2,Type} from "lucide-react";
+import {AtSign,CalendarDays,CheckSquare,ChevronDown,ChevronLeft,ChevronUp,FileText,GitBranch,GripVertical,Hash,ListChecks,ListTree,Mail,MoreHorizontal,PanelTop,Plus,Settings,Share2,Star,Trash2,Type} from "lucide-react";
 import {useToast} from "../components/ToastProvider";
 import ConfirmModal from "../components/ConfirmModal";
 
@@ -42,28 +43,31 @@ function SortableField({id,children}) {
 }
 
 function FieldLibrary({onDragStart,onAdd}) {
+  const { t } = useTranslation();
   const [query,setQuery]=useState("");
   const fields=FIELD_DEFS.filter(item=>`${item.name} ${item.description}`.toLowerCase().includes(query.toLowerCase()));
   return <aside className="builder-library card" aria-label="Field Library">
-    <div className="builder-panel-title"><h2>Field Library</h2><p>Drag into the canvas or click to add.</p></div>
-    <input className="builder-library-search" value={query} onChange={event=>setQuery(event.target.value)} placeholder="Search fields..." aria-label="Search field types"/>
+    <div className="builder-panel-title"><h2>{t('ui.field_library', `Field Library`)}</h2><p>{t('ui.drag_into_the_canvas_or_click_to_add', `Drag into the canvas or click to add.`)}</p></div>
+    <input className="input builder-library-search" style={{ marginBottom: '16px' }} value={query} onChange={event=>setQuery(event.target.value)} placeholder={t('ui.search_fields', `Search fields...`)} aria-label="Search field types"/>
     <div className="builder-library-list">{fields.map(({type,name,description,Icon})=><button className="library-field" key={type} type="button" draggable onDragStart={event=>onDragStart(event,type)} onClick={()=>onAdd(type)}><span><Icon/></span><strong>{name}</strong><small>{description}</small></button>)}</div>
   </aside>;
 }
 
 function AddFieldSheet({open,onClose,onAdd,busy}) {
+  const { t } = useTranslation();
   const [type,setType]=useState("text");
   if(!open) return null;
   return <div className="modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}>
     <form className="card add-field-modal" role="dialog" aria-modal="true" aria-labelledby="add-field-title" onSubmit={async event=>{event.preventDefault();if(await onAdd(type))onClose()}}>
-      <div className="section-heading"><div><h2 id="add-field-title">Add Field</h2><p>Choose a field type to add to your form.</p></div></div>
-      <label>Field type<select value={type} onChange={event=>setType(event.target.value)}>{FIELD_DEFS.map(item=><option value={item.type} key={item.type}>{item.name}</option>)}</select></label>
-      <div className="form-actions"><button className="button ghost" type="button" onClick={onClose}>Cancel</button><button className="button primary" disabled={!!busy}>{busy==="add"?"Adding...":"Add Field"}</button></div>
+      <div className="section-heading"><div><h2 id="add-field-title">{t('ui.add_field', `Add Field`)}</h2><p>{t('ui.choose_a_field_type_to_add_to_your_form', `Choose a field type to add to your form.`)}</p></div></div>
+      <label>{t('ui.field_type', `Field type`)}<select value={type} onChange={event=>setType(event.target.value)}>{FIELD_DEFS.map(item=><option value={item.type} key={item.type}>{item.name}</option>)}</select></label>
+      <div className="form-actions"><button className="button ghost" type="button" onClick={onClose}>{t('ui.cancel', `Cancel`)}</button><button className="button primary" disabled={!!busy}>{busy==="add"?"Adding...":"Add Field"}</button></div>
     </form>
   </div>;
 }
 
 function RuleControl({field,ruleType,label,type="text",placeholder,reload,onSaved,withErrorMessage=false,helper}) {
+  const { t } = useTranslation();
   const existing=(field.validation_rules||[]).find(rule=>rule.rule_type===ruleType);
   const [value,setValue]=useState(existing?.rule_value||"");
   const [errorMessage,setErrorMessage]=useState(existing?.error_message||"");
@@ -78,10 +82,11 @@ function RuleControl({field,ruleType,label,type="text",placeholder,reload,onSave
       reload();
     } catch(error) { onSaved?.(messageFrom(error,"Unable to save validation."),"error"); }
   };
-  return <label>{label}<div className="rule-control"><input type={type} value={value} onChange={event=>setValue(event.target.value)} placeholder={placeholder}/><button className="button secondary" type="button" onClick={save}>Save</button></div>{withErrorMessage&&<span className="rule-error-label">Custom Error Message<input className="rule-error-input" value={errorMessage} onChange={event=>setErrorMessage(event.target.value)} placeholder="Show this message when the pattern does not match"/></span>}{helper&&<small className="rule-helper">{helper}</small>}{withErrorMessage&&value&&<small className="validation-preview">Validation preview: {errorMessage||"Invalid format"}</small>}</label>;
+  return <div className="field-group"><label className="field-label">{label}</label><div className="flex gap-2"><input className="input" type={type} value={value} onChange={event=>setValue(event.target.value)} placeholder={placeholder}/><button className="btn btn-secondary" type="button" onClick={save}>{t('ui.save', `Save`)}</button></div>{withErrorMessage&&<div className="mt-4"><label className="field-label">{t('ui.custom_error_message', `Custom Error Message`)}</label><input className="input mt-2" value={errorMessage} onChange={event=>setErrorMessage(event.target.value)} placeholder={t('ui.show_this_message_when_the_pattern_does', `Show this message when the pattern does not match`)}/></div>}{helper&&<div className="field-hint mt-2">{helper}</div>}{withErrorMessage&&value&&<div className="field-hint mt-2">{t('ui.validation_preview', `Validation preview:`)}{errorMessage||"Invalid format"}</div>}</div>;
 }
 
 function OptionsEditor({field,formId,reload,onSaved}) {
+  const { t } = useTranslation();
   const [option,setOption]=useState("");
   const addOption=async event=>{
     event.preventDefault();
@@ -91,10 +96,11 @@ function OptionsEditor({field,formId,reload,onSaved}) {
   };
   const deleteOption=async id=>{try{await API.delete(`/forms/${formId}/fields/${field.id}/options/${id}`);onSaved?.("Option deleted.");reload()}catch(error){onSaved?.(messageFrom(error,"Unable to delete option."),"error")}};
   const editOption=async item=>{const label=prompt("Option label",item.option_label);if(!label?.trim())return;try{await API.patch(`/forms/${formId}/fields/${field.id}/options/${item.id}`,{option_label:label.trim(),option_value:label.trim().toLowerCase().replace(/\s+/g,"_")});onSaved?.("Option updated.");reload()}catch(error){onSaved?.(messageFrom(error,"Unable to update option."),"error")}};
-  return <div className="settings-block"><h3>Options</h3><div className="chips">{field.options?.map(item=><span className="chip" key={item.id}>{item.option_label}<button onClick={()=>editOption(item)} aria-label={`Edit ${item.option_label}`}>Edit</button><button onClick={()=>deleteOption(item.id)} aria-label={`Delete ${item.option_label}`}>Delete</button></span>)}</div><form className="mini-form" onSubmit={addOption}><input value={option} onChange={event=>setOption(event.target.value)} placeholder="New option" required/><button className="button secondary">Add option</button></form></div>;
+  return <div className="settings-block"><h3>{t('ui.options', `Options`)}</h3><div className="chips">{field.options?.map(item=><span className="chip" key={item.id}>{item.option_label}<button onClick={()=>editOption(item)} aria-label={`Edit ${item.option_label}`}>{t('ui.edit', `Edit`)}</button><button onClick={()=>deleteOption(item.id)} aria-label={`Delete ${item.option_label}`}>{t('ui.delete', `Delete`)}</button></span>)}</div><form className="mini-form" onSubmit={addOption}><input value={option} onChange={event=>setOption(event.target.value)} placeholder={t('ui.new_option', `New option`)} required/><button className="button secondary">{t('ui.add_option', `Add option`)}</button></form></div>;
 }
 
 function FileSettings({field,reload,onSaved}) {
+  const { t } = useTranslation();
   const rules=Object.fromEntries((field.validation_rules||[]).map(rule=>[rule.rule_type,rule]));
   const selected=(rules.allowed_file_types?.rule_value?rules.allowed_file_types.rule_value.split(","):FILE_TYPES).map(item=>item.trim().toLowerCase()).filter(Boolean);
   const [maxSize,setMaxSize]=useState(rules.file_size?.rule_value||"5");
@@ -108,7 +114,7 @@ function FileSettings({field,reload,onSaved}) {
     } catch(error) { onSaved?.(messageFrom(error,"Unable to save file upload settings."),"error"); }
   };
   const toggle=async type=>{const next=selected.includes(type)?selected.filter(item=>item!==type):[...selected,type];await saveRule("allowed_file_types",next.join(","))};
-  return <div className="settings-block file-settings"><h3>File Upload</h3><p>Uses the existing working File Upload behavior.</p><div className="file-type-options">{FILE_TYPES.map(type=><label key={type}><input type="checkbox" checked={selected.includes(type)} onChange={()=>toggle(type)}/>{type.toUpperCase()}</label>)}</div><form className="mini-form" onSubmit={event=>{event.preventDefault();saveRule("file_size",maxSize)}}><label>Maximum size (MB)<input type="number" min="1" max="100" value={maxSize} onChange={event=>setMaxSize(event.target.value)} required/></label><button className="button secondary">Save size</button></form></div>;
+  return <div className="settings-block file-settings"><h3 className="text-h3 mb-4">{t('ui.file_upload_options', `File Upload Options`)}</h3><div className="flex-col gap-3 mb-4">{FILE_TYPES.map(type=><label key={type} className="flex items-center gap-2" style={{ cursor: 'pointer' }}><input type="checkbox" style={{ accentColor: 'var(--brand-600)', width: '16px', height: '16px', cursor: 'pointer' }} checked={selected.includes(type)} onChange={()=>toggle(type)}/><span className="text-body">{type.toUpperCase()}</span></label>)}</div><form className="flex-col gap-2" onSubmit={event=>{event.preventDefault();saveRule("file_size",maxSize)}}><label className="field-label">{t('ui.maximum_size_mb', `Maximum size (MB)`)}</label><div className="flex gap-2"><input className="input" type="number" min="1" max="100" value={maxSize} onChange={event=>setMaxSize(event.target.value)} required/><button className="btn btn-secondary">{t('ui.save_size', `Save size`)}</button></div></form></div>;
 }
 
 const VALIDATION_PRESETS={
@@ -126,6 +132,7 @@ const VALIDATION_PRESETS={
   custom:{label:"Custom Regex"},
 };
 function ValidationTypeControl({field,reload,onSaved}) {
+  const { t } = useTranslation();
   const rules=Object.fromEntries((field.validation_rules||[]).map(rule=>[rule.rule_type,rule]));
   const regexValue=rules.regex?.rule_value||"";
   const initialType=rules.email?"email":Object.entries(VALIDATION_PRESETS).find(([key,item])=>key!=="custom"&&item.rule==="regex"&&item.value===regexValue)?.[0]||(regexValue?"custom":"none");
@@ -156,21 +163,21 @@ function ValidationTypeControl({field,reload,onSaved}) {
     }catch(error){onSaved(messageFrom(error,"Unable to save validation."),"error")}
   };
   return <div className="settings-block validation-type-card">
-    <label>Validation Type
-      <select value={type} onChange={event=>setType(event.target.value)}>
+    <label>{t('ui.validation_type', `Validation Type`)}<select value={type} onChange={event=>setType(event.target.value)}>
         {Object.entries(VALIDATION_PRESETS).map(([value,item])=><option key={value} value={value}>{item.label}</option>)}
       </select>
     </label>
     {type==="custom"&&<>
-      <label>Regex Pattern<input value={pattern} onChange={event=>setPattern(event.target.value)} placeholder="^[6-9]\\d{9}$"/></label>
-      <label>Custom Error Message<input value={message} onChange={event=>setMessage(event.target.value)} placeholder="Enter a valid value"/></label>
-      <small className="rule-helper">Examples: Phone ^[6-9]\d&#123;9&#125;$ · Email ^[^\s@]+@[^\s@]+\.[^\s@]+$ · PAN ^[A-Z]&#123;5&#125;[0-9]&#123;4&#125;[A-Z]&#123;1&#125;$</small>
+      <label>{t('ui.regex_pattern', `Regex Pattern`)}<input value={pattern} onChange={event=>setPattern(event.target.value)} placeholder={t('ui._6_9_d_9', `^[6-9]\\d{9}$`)}/></label>
+      <label>{t('ui.custom_error_message', `Custom Error Message`)}<input value={message} onChange={event=>setMessage(event.target.value)} placeholder={t('ui.enter_a_valid_value', `Enter a valid value`)}/></label>
+      <small className="rule-helper">{t('ui.examples_phone_6_9_d_9_email_s_s_s_pan_a', `Examples: Phone ^[6-9]\d{9}$ · Email ^[^\s@]+@[^\s@]+\.[^\s@]+$ · PAN ^[A-Z]{5}[0-9]{4}[A-Z]{1}$`)}</small>
     </>}
-    <button className="button primary validation-save-button" type="button" onClick={save}>Save Validation</button>
+    <button className="button primary validation-save-button" type="button" onClick={save}>{t('ui.save_validation', `Save Validation`)}</button>
   </div>;
 }
 
 function ToggleRuleControl({field,ruleType,label,reload,onSaved}) {
+  const { t } = useTranslation();
   const existing=(field.validation_rules||[]).find(rule=>rule.rule_type===ruleType);
   const checked=!!existing&&String(existing.rule_value||"true").toLowerCase()!=="false";
   const toggle=async()=>{
@@ -185,37 +192,39 @@ function ToggleRuleControl({field,ruleType,label,reload,onSaved}) {
 }
 
 function FieldValidationRules({field,reload,onSaved}) {
+  const { t } = useTranslation();
   const textLike=["text","textarea","email"].includes(field.field_type);
   const numeric=field.field_type==="number";
   const dated=field.field_type==="date";
   return <div className="settings-block field-validation-rules">
-    <h3>Field Rules</h3>
+    <h3>{t('ui.field_rules', `Field Rules`)}</h3>
     {textLike&&<>
-      <RuleControl field={field} ruleType="min_length" label="Minimum length" type="number" placeholder="2" reload={reload} onSaved={onSaved}/>
-      <RuleControl field={field} ruleType="max_length" label="Maximum length" type="number" placeholder="120" reload={reload} onSaved={onSaved}/>
+      <RuleControl field={field} ruleType="min_length" label={t('ui.minimum_length', `Minimum length`)} type="number" placeholder="2" reload={reload} onSaved={onSaved}/>
+      <RuleControl field={field} ruleType="max_length" label={t('ui.maximum_length', `Maximum length`)} type="number" placeholder="120" reload={reload} onSaved={onSaved}/>
     </>}
     {numeric&&<>
       <div className="inline-checks">
-        <ToggleRuleControl field={field} ruleType="integer" label="Require whole number" reload={reload} onSaved={onSaved}/>
-        <ToggleRuleControl field={field} ruleType="decimal" label="Allow decimal format" reload={reload} onSaved={onSaved}/>
+        <ToggleRuleControl field={field} ruleType="integer" label={t('ui.require_whole_number', `Require whole number`)} reload={reload} onSaved={onSaved}/>
+        <ToggleRuleControl field={field} ruleType="decimal" label={t('ui.allow_decimal_format', `Allow decimal format`)} reload={reload} onSaved={onSaved}/>
       </div>
-      <RuleControl field={field} ruleType="min_value" label="Minimum value" type="number" placeholder="0" reload={reload} onSaved={onSaved}/>
-      <RuleControl field={field} ruleType="max_value" label="Maximum value" type="number" placeholder="100" reload={reload} onSaved={onSaved}/>
+      <RuleControl field={field} ruleType="min_value" label={t('ui.minimum_value', `Minimum value`)} type="number" placeholder="0" reload={reload} onSaved={onSaved}/>
+      <RuleControl field={field} ruleType="max_value" label={t('ui.maximum_value', `Maximum value`)} type="number" placeholder="100" reload={reload} onSaved={onSaved}/>
     </>}
     {dated&&<>
-      <RuleControl field={field} ruleType="min_date" label="Earliest date" type="date" reload={reload} onSaved={onSaved}/>
-      <RuleControl field={field} ruleType="max_date" label="Latest date" type="date" reload={reload} onSaved={onSaved}/>
+      <RuleControl field={field} ruleType="min_date" label={t('ui.earliest_date', `Earliest date`)} type="date" reload={reload} onSaved={onSaved}/>
+      <RuleControl field={field} ruleType="max_date" label={t('ui.latest_date', `Latest date`)} type="date" reload={reload} onSaved={onSaved}/>
     </>}
-    {!textLike&&!numeric&&!dated&&field.field_type!=="file"&&field.field_type!=="rating"&&<p className="muted">No extra field-level validation is needed for this field type.</p>}
+    {!textLike&&!numeric&&!dated&&field.field_type!=="file"&&field.field_type!=="rating"&&<p className="muted">{t('ui.no_extra_field_level_validation_is_neede', `No extra field-level validation is needed for this field type.`)}</p>}
   </div>;
 }
 
 function FieldSettings({field,formId,reload,onSaved}) {
+  const { t } = useTranslation();
   const [tab,setTab]=useState("general");
   const [draft,setDraft]=useState({label:field?.label||"",required:!!field?.required,placeholder:field?.placeholder||"",help_text:field?.help_text||""});
   const labelRef=useRef(null);
   useEffect(()=>{setTab("general");setDraft({label:field?.label||"",required:!!field?.required,placeholder:field?.placeholder||"",help_text:field?.help_text||""});setTimeout(()=>labelRef.current?.focus(),50)},[field?.id]);
-  if(!field) return <div className="settings-empty"><Settings/><h2>Select a field</h2><p>Choose a field in the canvas to configure its settings.</p></div>;
+  if(!field) return <div className="settings-empty"><Settings/><h2>{t('ui.select_a_field', `Select a field`)}</h2><p>{t('ui.choose_a_field_in_the_canvas_to_configur', `Choose a field in the canvas to configure its settings.`)}</p></div>;
   const saveGeneral=async event=>{
     event.preventDefault();
     if(!draft.label.trim()) return onSaved("Field label is required.","error");
@@ -225,9 +234,9 @@ function FieldSettings({field,formId,reload,onSaved}) {
   const optionField=OPTION_TYPES.includes(field.field_type);
   return <div className="settings-panel-content">
     <div className="settings-selected"><span>{FIELD_LABELS[field.field_type]}</span><h2>{field.label}</h2></div>
-    <div className="settings-tabs compact"><button className={tab==="general"?"active":""} onClick={()=>setTab("general")}>General</button><button className={tab==="validation"?"active":""} onClick={()=>setTab("validation")}>Validation</button>{optionField&&<button className={tab==="options"?"active":""} onClick={()=>setTab("options")}>Options</button>}</div>
-    {tab==="general"&&<form className="settings-form" onSubmit={saveGeneral}><label>Label<input ref={labelRef} value={draft.label} onChange={event=>setDraft({...draft,label:event.target.value})} required/></label>{["text","email","number","textarea","dropdown"].includes(field.field_type)&&<label>Placeholder<input value={draft.placeholder} onChange={event=>setDraft({...draft,placeholder:event.target.value})}/></label>}<label>Help Text<textarea rows="3" value={draft.help_text} onChange={event=>setDraft({...draft,help_text:event.target.value})}/></label><label className="check-label"><input type="checkbox" checked={draft.required} onChange={event=>setDraft({...draft,required:event.target.checked})}/> Required</label><button className="button primary">Save settings</button></form>}
-    {tab==="validation"&&<div className="settings-form"><ValidationTypeControl field={field} reload={reload} onSaved={onSaved}/><FieldValidationRules field={field} reload={reload} onSaved={onSaved}/>{field.field_type==="file"&&<FileSettings field={field} reload={reload} onSaved={onSaved}/>} {field.field_type==="rating"&&<div className="settings-block rating-settings"><h3>Rating Settings</h3><RuleControl field={field} ruleType="min_value" label="Scale minimum" type="number" placeholder="1" reload={reload} onSaved={onSaved}/><RuleControl field={field} ruleType="max_value" label="Scale maximum" type="number" placeholder="5" reload={reload} onSaved={onSaved}/><RuleControl field={field} ruleType="rating_style" label="Display style" placeholder="stars or numbers" reload={reload} onSaved={onSaved}/><RuleControl field={field} ruleType="low_label" label="Low label" placeholder="Very dissatisfied" reload={reload} onSaved={onSaved}/><RuleControl field={field} ruleType="high_label" label="High label" placeholder="Very satisfied" reload={reload} onSaved={onSaved}/></div>}</div>}
+    <div className="settings-tabs compact"><button className={tab==="general"?"active":""} onClick={()=>setTab("general")}>{t('ui.general', `General`)}</button><button className={tab==="validation"?"active":""} onClick={()=>setTab("validation")}>{t('ui.validation', `Validation`)}</button>{optionField&&<button className={tab==="options"?"active":""} onClick={()=>setTab("options")}>{t('ui.options', `Options`)}</button>}</div>
+    {tab==="general"&&<form className="settings-form" onSubmit={saveGeneral}><label>{t('ui.label', `Label`)}<input ref={labelRef} value={draft.label} onChange={event=>setDraft({...draft,label:event.target.value})} required/></label>{["text","email","number","textarea","dropdown"].includes(field.field_type)&&<label>{t('ui.placeholder', `Placeholder`)}<input value={draft.placeholder} onChange={event=>setDraft({...draft,placeholder:event.target.value})}/></label>}<label>{t('ui.help_text', `Help Text`)}<textarea rows="3" value={draft.help_text} onChange={event=>setDraft({...draft,help_text:event.target.value})}/></label><label className="check-label"><input type="checkbox" checked={draft.required} onChange={event=>setDraft({...draft,required:event.target.checked})}/>{t('ui.required', `Required`)}</label><button className="button primary">{t('ui.save_settings', `Save settings`)}</button></form>}
+    {tab==="validation"&&<div className="settings-form"><ValidationTypeControl field={field} reload={reload} onSaved={onSaved}/><FieldValidationRules field={field} reload={reload} onSaved={onSaved}/>{field.field_type==="file"&&<FileSettings field={field} reload={reload} onSaved={onSaved}/>} {field.field_type==="rating"&&<div className="settings-block rating-settings"><h3>{t('ui.rating_settings', `Rating Settings`)}</h3><RuleControl field={field} ruleType="min_value" label={t('ui.scale_minimum', `Scale minimum`)} type="number" placeholder="1" reload={reload} onSaved={onSaved}/><RuleControl field={field} ruleType="max_value" label={t('ui.scale_maximum', `Scale maximum`)} type="number" placeholder="5" reload={reload} onSaved={onSaved}/><RuleControl field={field} ruleType="rating_style" label={t('ui.display_style', `Display style`)} placeholder={t('ui.stars_or_numbers', `stars or numbers`)} reload={reload} onSaved={onSaved}/><RuleControl field={field} ruleType="low_label" label={t('ui.low_label', `Low label`)} placeholder={t('ui.very_dissatisfied', `Very dissatisfied`)} reload={reload} onSaved={onSaved}/><RuleControl field={field} ruleType="high_label" label={t('ui.high_label', `High label`)} placeholder={t('ui.very_satisfied', `Very satisfied`)} reload={reload} onSaved={onSaved}/></div>}</div>}
     {tab==="options"&&optionField&&<OptionsEditor field={field} formId={formId} reload={reload} onSaved={onSaved}/>}
   </div>;
 }
@@ -261,6 +270,7 @@ const logicLoadMessage=error=>{
 };
 
 function LogicPanel({formId,fields,onSaved,onRulesChange}) {
+  const { t } = useTranslation();
   const firstTrigger=fields[0]?.id||"";
   const firstTarget=fields.find(field=>field.id!==firstTrigger)?.id||"";
   const blankDraft={trigger_field_id:firstTrigger,operator:logicOperatorOptions(fields[0])[0]||"equals",comparison_value:"",action:"show",target_field_id:firstTarget};
@@ -329,23 +339,24 @@ function LogicPanel({formId,fields,onSaved,onRulesChange}) {
     return <><strong>{trigger} {LOGIC_OPERATOR_LABELS[rule.operator]}{comparison}</strong><span>→ {LOGIC_ACTION_LABELS[rule.action]||rule.action} {target}</span></>;
   };
   return <div className="settings-panel-content logic-panel">
-    <div className="settings-selected"><span>Conditional logic</span><h2>Rule Builder</h2></div>
+    <div className="settings-selected"><span>{t('ui.conditional_logic', `Conditional logic`)}</span><h2>{t('ui.rule_builder', `Rule Builder`)}</h2></div>
     <form className="logic-rule-form" onSubmit={saveRule}>
-      <label>Trigger field<select value={draft.trigger_field_id} onChange={event=>setDraft({...draft,trigger_field_id:event.target.value,operator:logicOperatorOptions(fieldById[event.target.value])[0]||"is_empty",comparison_value:""})}>{fields.map(field=><option value={field.id} key={field.id}>{field.label}</option>)}</select></label>
-      <label>Operator<select value={draft.operator} onChange={event=>setDraft({...draft,operator:event.target.value,comparison_value:LOGIC_EMPTY_OPERATORS.includes(event.target.value)?"":draft.comparison_value})}>{operators.map(operator=><option value={operator} key={operator}>{LOGIC_OPERATOR_LABELS[operator]}</option>)}</select></label>
-      {!hideComparison&&<label>Comparison value<input value={draft.comparison_value} onChange={event=>setDraft({...draft,comparison_value:event.target.value})} placeholder={["in","not_in"].includes(draft.operator)?"CSE,AI&DS,IT":"Yes"}/>{["in","not_in"].includes(draft.operator)&&<small>Enter comma-separated values, for example: CSE,AI&amp;DS,IT</small>}</label>}
-      <label>Action<select value={draft.action} onChange={event=>setDraft({...draft,action:event.target.value})}>{Object.entries(LOGIC_ACTION_LABELS).map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>
-      <label>Target field<select value={draft.target_field_id} onChange={event=>setDraft({...draft,target_field_id:event.target.value})}>{targets.map(field=><option value={field.id} key={field.id}>{field.label}</option>)}</select></label>
-      <div className="form-actions"><button className="button primary" disabled={saving||fields.length<2}>{saving?"Saving...":editingId?"Update Rule":"Create Rule"}</button>{editingId&&<button className="button ghost" type="button" onClick={resetDraft}>Cancel edit</button>}</div>
+      <label>{t('ui.trigger_field', `Trigger field`)}<select value={draft.trigger_field_id} onChange={event=>setDraft({...draft,trigger_field_id:event.target.value,operator:logicOperatorOptions(fieldById[event.target.value])[0]||"is_empty",comparison_value:""})}>{fields.map(field=><option value={field.id} key={field.id}>{field.label}</option>)}</select></label>
+      <label>{t('ui.operator', `Operator`)}<select value={draft.operator} onChange={event=>setDraft({...draft,operator:event.target.value,comparison_value:LOGIC_EMPTY_OPERATORS.includes(event.target.value)?"":draft.comparison_value})}>{operators.map(operator=><option value={operator} key={operator}>{LOGIC_OPERATOR_LABELS[operator]}</option>)}</select></label>
+      {!hideComparison&&<label>{t('ui.comparison_value', `Comparison value`)}<input value={draft.comparison_value} onChange={event=>setDraft({...draft,comparison_value:event.target.value})} placeholder={["in","not_in"].includes(draft.operator)?"CSE,AI&DS,IT":"Yes"}/>{["in","not_in"].includes(draft.operator)&&<small>{t('ui.enter_comma_separated_values_for_example', `Enter comma-separated values, for example: CSE,AI&DS,IT`)}</small>}</label>}
+      <label>{t('ui.action', `Action`)}<select value={draft.action} onChange={event=>setDraft({...draft,action:event.target.value})}>{Object.entries(LOGIC_ACTION_LABELS).map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>
+      <label>{t('ui.target_field', `Target field`)}<select value={draft.target_field_id} onChange={event=>setDraft({...draft,target_field_id:event.target.value})}>{targets.map(field=><option value={field.id} key={field.id}>{field.label}</option>)}</select></label>
+      <div className="form-actions"><button className="button primary" disabled={saving||fields.length<2}>{saving?"Saving...":editingId?"Update Rule":"Create Rule"}</button>{editingId&&<button className="button ghost" type="button" onClick={resetDraft}>{t('ui.cancel_edit', `Cancel edit`)}</button>}</div>
     </form>
     <div className="logic-rule-list">
-      <h3>Existing rules</h3>
-      {loadError?<div className="logic-error-state" role="alert"><p>{loadError}</p><button type="button" className="button secondary" onClick={loadRules} disabled={loading}>{loading?"Retrying...":"Retry"}</button></div>:loading?<p className="muted">Loading rules...</p>:validRules.length?validRules.map(rule=><article className="logic-rule-item" key={rule.id}><div>{describeRule(rule)}</div><div><button type="button" onClick={()=>editRule(rule)}>Edit</button><button type="button" className="danger" onClick={()=>deleteRule(rule)}>Delete</button></div></article>):<p className="muted">No conditional rules yet. Create a rule to manage field visibility or requirements later.</p>}
+      <h3>{t('ui.existing_rules', `Existing rules`)}</h3>
+      {loadError?<div className="logic-error-state" role="alert"><p>{loadError}</p><button type="button" className="button secondary" onClick={loadRules} disabled={loading}>{loading?"Retrying...":"Retry"}</button></div>:loading?<p className="muted">{t('ui.loading_rules', `Loading rules...`)}</p>:validRules.length?validRules.map(rule=><article className="logic-rule-item" key={rule.id}><div>{describeRule(rule)}</div><div><button type="button" onClick={()=>editRule(rule)}>{t('ui.edit', `Edit`)}</button><button type="button" className="danger" onClick={()=>deleteRule(rule)}>{t('ui.delete', `Delete`)}</button></div></article>):<p className="muted">{t('ui.no_conditional_rules_yet_create_a_rule_t', `No conditional rules yet. Create a rule to manage field visibility or requirements later.`)}</p>}
     </div>
   </div>;
 }
 
 function HeaderMoreMenu({onEdit,onArchive,onDelete,busy,onOpen}) {
+  const { t } = useTranslation();
   const [open,setOpen]=useState(false);
   const buttonRef=useRef(null);
   const menuRef=useRef(null);
@@ -378,12 +389,13 @@ function HeaderMoreMenu({onEdit,onArchive,onDelete,busy,onOpen}) {
     document.addEventListener("keydown",escape);
     return()=>{window.removeEventListener("resize",place);window.removeEventListener("scroll",place,true);document.removeEventListener("mousedown",close);document.removeEventListener("keydown",escape)};
   },[open]);
-  const menu=open&&createPortal(<div ref={menuRef} className="builder-action-popover" style={{top:position.top,left:position.left}} role="menu" aria-label="Form actions"><button role="menuitem" onClick={()=>{setOpen(false);onEdit()}}>Edit Details</button><button role="menuitem" onClick={()=>{setOpen(false);onArchive()}} disabled={!!busy}>Archive Form</button><span className="popover-separator"/><button role="menuitem" className="danger" onClick={()=>{setOpen(false);onDelete()}}>Delete Form</button></div>,document.body);
+  const menu=open&&createPortal(<div ref={menuRef} className="builder-action-popover" style={{top:position.top,left:position.left}} role="menu" aria-label="Form actions"><button role="menuitem" onClick={()=>{setOpen(false);onEdit()}}>{t('ui.edit_details', `Edit Details`)}</button><button role="menuitem" onClick={()=>{setOpen(false);onArchive()}} disabled={!!busy}>{t('ui.archive_form', `Archive Form`)}</button><span className="popover-separator"/><button role="menuitem" className="danger" onClick={()=>{setOpen(false);onDelete()}}>{t('ui.delete_form', `Delete Form`)}</button></div>,document.body);
   const toggle=event=>{event.stopPropagation();setOpen(current=>{const next=!current;if(next)onOpen?.();return next})};
   return <div className="action-menu-wrap"><button ref={buttonRef} className="more-button" type="button" onClick={toggle} aria-label="More form actions" aria-haspopup="menu" aria-expanded={open}><MoreHorizontal/></button>{menu}</div>;
 }
 
 function FieldCardMenu({field,open,onToggle,onClose,onSelect,onDuplicate,onDelete}) {
+  const { t } = useTranslation();
   const buttonRef=useRef(null);
   const menuRef=useRef(null);
   const [position,setPosition]=useState({top:0,left:0});
@@ -416,11 +428,58 @@ function FieldCardMenu({field,open,onToggle,onClose,onSelect,onDuplicate,onDelet
     return()=>{window.removeEventListener("resize",place);window.removeEventListener("scroll",place,true);document.removeEventListener("mousedown",close);document.removeEventListener("keydown",escape)};
   },[open,onClose]);
   const run=action=>{onClose();action()};
-  const menu=open&&createPortal(<div ref={menuRef} className="builder-action-popover field-action-popover" style={{top:position.top,left:position.left}} role="menu" aria-label={`Actions for ${field.label}`} onClick={event=>event.stopPropagation()}><button role="menuitem" onClick={()=>run(()=>onSelect(field))}>Edit</button><button role="menuitem" onClick={()=>run(()=>onDuplicate(field))}>Duplicate</button><span className="popover-separator"/><button role="menuitem" className="danger" onClick={()=>run(()=>onDelete(field))}>Delete</button></div>,document.body);
+  const menu=open&&createPortal(<div ref={menuRef} className="builder-action-popover field-action-popover" style={{top:position.top,left:position.left}} role="menu" aria-label={`Actions for ${field.label}`} onClick={event=>event.stopPropagation()}><button role="menuitem" onClick={()=>run(()=>onSelect(field))}>{t('ui.edit', `Edit`)}</button><button role="menuitem" onClick={()=>run(()=>onDuplicate(field))}>{t('ui.duplicate', `Duplicate`)}</button><span className="popover-separator"/><button role="menuitem" className="danger" onClick={()=>run(()=>onDelete(field))}>{t('ui.delete', `Delete`)}</button></div>,document.body);
   return <div className="action-menu-wrap"><button ref={buttonRef} className="field-more-button" type="button" onClick={event=>{event.stopPropagation();onToggle(field.id)}} aria-label={`More actions for ${field.label}`} aria-haspopup="menu" aria-expanded={open}><MoreHorizontal/></button>{menu}</div>;
 }
 
+function VersionHistoryPanel({ versions }) {
+  const { t } = useTranslation();
+  return (
+    <div className="settings-panel-content logic-panel">
+      <div className="settings-selected">
+        <span>{t('ui.publish_history', `Publish history`)}</span>
+        <h2>{t('ui.version_timeline', `Version Timeline`)}</h2>
+      </div>
+      <div className="logic-rule-list" style={{ marginTop: 24 }}>
+        {!versions?.length ? (
+          <div className="empty-state" style={{ padding: '32px 16px', textAlign: 'center' }}>
+            <GitBranch size={32} color="var(--border-strong)" style={{ marginBottom: 12, opacity: 0.5 }} />
+            <strong style={{ display: 'block', fontSize: 14, marginBottom: 4, color: 'var(--text-primary)' }}>{t('ui.no_versions_yet', `No versions yet`)}</strong>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{t('ui.publish_your_form_to_create_the_first_ve', `Publish your form to create the first version.`)}</p>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+            {versions.map((v, i) => (
+              <div key={v.id || i} style={{ display: 'flex', gap: 16, position: 'relative' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <div style={{ width: 32, height: 32, borderRadius: '50%', background: i === 0 ? 'var(--brand-100)' : 'var(--bg-page)', color: i === 0 ? 'var(--brand-600)' : 'var(--text-tertiary)', border: `1px solid ${i === 0 ? 'var(--brand-200)' : 'var(--border-subtle)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1, flexShrink: 0 }}>
+                    <GitBranch size={14} />
+                  </div>
+                  {i < versions.length - 1 && <div style={{ width: 2, flex: 1, background: 'var(--border-subtle)', margin: '4px 0', minHeight: 24 }} />}
+                </div>
+                <div style={{ flex: 1, paddingBottom: i < versions.length - 1 ? 24 : 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                      <h4 style={{ margin: '0 0 4px 0', fontSize: 14, fontWeight: 700, color: i === 0 ? 'var(--text-primary)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>{t('ui.version', `Version`)}{v.version_number}
+                        {i === 0 && <span className="badge" style={{ background: 'var(--brand-50)', color: 'var(--brand-700)', border: '1px solid var(--brand-200)', fontSize: 11, padding: '2px 6px' }}>{t('ui.latest', `Latest`)}</span>}
+                      </h4>
+                      <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
+                        {new Date(v.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function FormBuilder() {
+  const { t } = useTranslation();
   const {formId}=useParams();
   const navigate=useNavigate();
   const [form,setForm]=useState(null);
@@ -520,7 +579,7 @@ export default function FormBuilder() {
   };
   const publish=async()=>{setBusy("publish");try{const {data}=await API.post(`/forms/${formId}/publish`);if(data?.unchanged){toast.success(`No changes to publish. Version ${data.version_number} is already up to date.`);return}flash(`Form published successfully - version ${data.version_number}.`);await loadData()}catch(error){toast.error(messageFrom(error,"Unable to publish the form. Please try again."))}finally{setBusy("")}};
   const archive=async()=>{setBusy("archive");try{await API.post(`/forms/${formId}/archive`);flash("Form archived.");await loadData()}catch(error){toast.error(messageFrom(error,"Unable to archive the form. Please try again."))}finally{setBusy("")}};
-  const deleteForm=async()=>{setBusy("delete-form");try{await API.delete(`/forms/${formId}`);toast.success("Form deleted.");navigate("/forms",{replace:true})}catch(error){toast.error(messageFrom(error,"Unable to delete form."))}finally{setBusy("");setConfirmDelete(false)}};
+  const deleteForm=async()=>{setBusy("delete-form");try{await API.delete(`/forms/${formId}`);toast.success("Form deleted.");navigate("/workspace/forms",{replace:true})}catch(error){toast.error(messageFrom(error,"Unable to delete form."))}finally{setBusy("");setConfirmDelete(false)}};
   const generateLink=async()=>{setBusy("share");try{const {data}=await API.post(`/forms/${formId}/generate-link`);setShareUrl(`${window.location.origin}/f/${data.link_token}`);flash("Share link generated.")}catch(error){toast.error(messageFrom(error,"Unable to generate share link. Publish the form first."))}finally{setBusy("")}};
   const copyLink=async()=>{try{await navigator.clipboard.writeText(shareUrl);flash("Link copied to clipboard.")}catch{toast.error("Copy failed. Select the link and copy it manually.")}};
   const saveDetails=async event=>{event.preventDefault();if(!details.title.trim())return toast.error("Form title is required.");try{await API.patch(`/forms/${formId}`,{title:details.title.trim(),description:details.description});flash("Form details updated.");setShowDetails(false);await loadData()}catch(error){toast.error(messageFrom(error,"Unable to update form details."))}};
@@ -528,30 +587,75 @@ export default function FormBuilder() {
   const dragStart=(event,type)=>{closeFieldMenu();event.dataTransfer.effectAllowed="copy";event.dataTransfer.setData("application/x-formflow-field-type",type)};
   const dropField=event=>{const type=event.dataTransfer.getData("application/x-formflow-field-type");if(!type)return;event.preventDefault();createField(type,FIELD_DEFAULTS[type],dropIndex??fields.length)};
 
-  if(loading)return <main className="page-shell"><div className="card empty-state">Loading builder...</div></main>;
-  if(!form)return <main className="page-shell"><div className="notice error">{notice?.text||"Form not found."}</div></main>;
+  if(loading)return <div className="page-shell"><div className="card empty-state">{t('ui.loading_builder', `Loading builder...`)}</div></div>;
+  if(!form)return <div className="page-shell"><div className="notice error">{notice?.text||"Form not found."}</div></div>;
 
-  return <main className="page-shell builder-page-clean">
-    <header className="builder-topbar"><div className="builder-topbar-left"><Link className="back-link" to="/forms">Back to Forms</Link><div><h1>{form.title}</h1><span className={`status ${form.status}`}>{form.status}</span></div></div><div className="builder-topbar-actions"><Link className="button secondary" to={`/forms/${formId}/preview`}>Preview</Link><Link className="button secondary" to={`/responses/forms/${formId}`}>Responses</Link><button className="button primary" onClick={publish} disabled={!!busy}>{busy==="publish"?"Publishing...":"Publish"}</button><HeaderMoreMenu onEdit={startDetails} onArchive={archive} onDelete={()=>setConfirmDelete(true)} busy={busy} onOpen={closeFieldMenu}/></div></header>
-    {notice&&<div className={`notice ${notice.type}`} role="status">{notice.text}</div>}
-    {showDetails&&<form className="card builder-details-drawer" onSubmit={saveDetails}><label>Form title<input value={details.title} onChange={event=>setDetails({...details,title:event.target.value})} required/></label><label>Description<textarea rows="3" value={details.description} onChange={event=>setDetails({...details,description:event.target.value})}/></label><div className="form-actions"><button className="button ghost" type="button" onClick={()=>setShowDetails(false)}>Cancel</button><button className="button primary">Save details</button></div></form>}
-    <div className="builder-clean-grid">
+  return <div className="builder-grid" style={{ margin: 'calc(var(--space-6) * -1)', width: 'calc(100% + var(--space-6) * 2)' }}>
+    <div className="builder-col">
       <FieldLibrary onDragStart={dragStart} onAdd={type=>createField(type,FIELD_DEFAULTS[type])}/>
-      <section className={`form-canvas card ${dragOver?"drop-active":""}`} onDragOver={event=>{if(Array.from(event.dataTransfer.types).includes("application/x-formflow-field-type")){event.preventDefault();setDragOver(true)}}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget)){setDragOver(false);setDropIndex(null)}}} onDrop={dropField}>
-        <div className="canvas-form-heading"><span className="eyebrow">Form Canvas</span><div className="canvas-form-title">{form.title}</div>{form.description&&<p>{form.description}</p>}<button className="button primary mobile-add-field" onClick={()=>setShowAdd(true)}><Plus/> Add Field</button></div>
-        {(!fields.length||dragOver)&&<div className="canvas-drop-hint" onDragEnter={()=>setDropIndex(0)}><strong>{fields.length?"Drop to add field":"Start building your form"}</strong><span>{fields.length?"Release to insert this field.":"Drag a field from the Field Library or click a field type to add it."}</span></div>}
-        {!!fields.length&&<DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragCancel={clearDragState} onDragEnd={handleDragEnd}><SortableContext items={fields.map(field=>field.id)} strategy={verticalListSortingStrategy}><div className="canvas-field-list">{fields.map((field,index)=><SortableField id={field.id} key={field.id}>{({attributes,listeners,setActivatorNodeRef})=>{const roles=ruleRole(field);return <article ref={node=>{if(node)fieldRefs.current[field.id]=node}} className={`canvas-field-card ${selectedId===field.id?"selected":""} ${dropIndex===index?"drop-before":""} ${dragIndicatorClass(field)}`} onClick={()=>selectField(field.id)} onDragEnter={event=>{if(Array.from(event.dataTransfer.types).includes("application/x-formflow-field-type"))setDropIndex(index)}}><button ref={setActivatorNodeRef} className="canvas-drag-handle" type="button" {...attributes} {...listeners} onClick={event=>event.stopPropagation()} aria-label={`Reorder ${field.label}`}><GripVertical size={16}/></button><div className="canvas-field-main"><h3>{field.label}</h3><span>{FIELD_LABELS[field.field_type]||field.field_type}</span></div>{field.required&&<span className="required-badge">Required</span>}{(roles.trigger||roles.target)&&<button type="button" className="logic-field-badge" onClick={event=>{event.stopPropagation();setSelectedId(field.id);setRightTab("logic")}}>{roles.trigger&&roles.target?"Logic":roles.trigger?"Trigger":"Target"}</button>}<FieldCardMenu field={field} open={openFieldMenuId===field.id} onToggle={toggleFieldMenu} onClose={closeFieldMenu} onSelect={()=>selectField(field.id)} onDuplicate={duplicateField} onDelete={deleteField}/><button className="field-more-button" type="button" onClick={event=>{event.stopPropagation();selectField(field.id)}} aria-label="Select field settings">{selectedId===field.id?<ChevronUp/>:<ChevronDown/>}</button></article>}}</SortableField>)}</div></SortableContext></DndContext>}
-        
+    </div>
+    
+    <div className="builder-canvas">
+      {notice&&<div className={`notice ${notice.type}`} style={{width: '100%', maxWidth: '680px', marginBottom: '16px'}} role="status">{notice.text}</div>}
+      
+      <div className="flex justify-between items-center w-full mb-4" style={{ maxWidth: '680px' }}>
+        <div className="flex items-center gap-3">
+          <Link className="btn btn-ghost btn-icon" to="/workspace/forms"><ChevronLeft size={18}/></Link>
+          <div className="flex-col">
+            <h1 className="text-h2" style={{ margin: 0 }}>{form.title}</h1>
+            <span className={`badge ${form.status}`}>{form.status}</span>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-secondary" onClick={startDetails}>{t('ui.details', `Details`)}</button>
+          <Link className="btn btn-secondary" to={`/workspace/forms/${formId}/preview`}>{t('ui.preview', `Preview`)}</Link>
+          <button className="btn btn-primary" onClick={publish} disabled={!!busy}>{busy==="publish"?"Publishing...":"Publish"}</button>
+          <HeaderMoreMenu onEdit={startDetails} onArchive={archive} onDelete={()=>setConfirmDelete(true)} busy={busy} onOpen={closeFieldMenu}/>
+        </div>
+      </div>
+
+      <section className={`builder-form-sheet ${dragOver?"drop-active":""}`} onDragOver={event=>{if(Array.from(event.dataTransfer.types).includes("application/x-formflow-field-type")){event.preventDefault();setDragOver(true)}}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget)){setDragOver(false);setDropIndex(null)}}} onDrop={dropField}>
+        {(!fields.length||dragOver)&&<div className="empty-state" onDragEnter={()=>setDropIndex(0)}><strong>{fields.length?"Drop to add field":"Start building your form"}</strong><p>{fields.length?"Release to insert this field.":"Drag a field from the Field Library or click a field type to add it."}</p></div>}
+        {!!fields.length&&<DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragCancel={clearDragState} onDragEnd={handleDragEnd}><SortableContext items={fields.map(field=>field.id)} strategy={verticalListSortingStrategy}><div className="flex-col gap-3">{fields.map((field,index)=><SortableField id={field.id} key={field.id}>{({attributes,listeners,setActivatorNodeRef})=>{const roles=ruleRole(field);return <article ref={node=>{if(node)fieldRefs.current[field.id]=node}} className={`panel ${selectedId===field.id?"selected":""} ${dropIndex===index?"drop-before":""} ${dragIndicatorClass(field)}`} onClick={()=>selectField(field.id)} onDragEnter={event=>{if(Array.from(event.dataTransfer.types).includes("application/x-formflow-field-type"))setDropIndex(index)}}><div className="panel-body flex gap-3 items-center" style={{ padding: '12px' }}><button ref={setActivatorNodeRef} className="btn-icon btn-ghost" type="button" {...attributes} {...listeners} onClick={event=>event.stopPropagation()} aria-label={`Reorder ${field.label}`}><GripVertical size={16}/></button><div className="flex-col" style={{ flex: 1 }}><h3 className="text-h3" style={{ margin: 0 }}>{field.label}</h3><span className="text-small">{FIELD_LABELS[field.field_type]||field.field_type}</span></div>{field.required&&<span className="badge">{t('ui.required', `Required`)}</span>}{(roles.trigger||roles.target)&&<button type="button" className="badge" style={{ cursor: 'pointer' }} onClick={event=>{event.stopPropagation();setSelectedId(field.id);setRightTab("logic")}}>{roles.trigger&&roles.target?"Logic":roles.trigger?"Trigger":"Target"}</button>}<FieldCardMenu field={field} open={openFieldMenuId===field.id} onToggle={toggleFieldMenu} onClose={closeFieldMenu} onSelect={()=>selectField(field.id)} onDuplicate={duplicateField} onDelete={deleteField}/><button className="btn-icon btn-ghost" type="button" onClick={event=>{event.stopPropagation();selectField(field.id)}} aria-label="Select field settings">{selectedId===field.id?<ChevronUp size={16}/>:<ChevronDown size={16}/>}</button></div></article>}}</SortableField>)}</div></SortableContext></DndContext>}
       </section>
-      <aside className="builder-right-panel card"><div className="right-panel-tabs"><button className={rightTab==="settings"?"active":""} onClick={()=>setRightTab("settings")}><Settings/> Field Settings</button><button className={rightTab==="logic"?"active":""} onClick={()=>setRightTab("logic")}><GitBranch/> Logic</button><button className={rightTab==="share"?"active":""} onClick={()=>setRightTab("share")}><Share2/> Share</button><button className={rightTab==="versions"?"active":""} onClick={()=>setRightTab("versions")}><FileText/> Versions</button></div>{rightTab==="settings"&&<FieldSettings field={selectedField} formId={formId} reload={loadData} onSaved={flash}/>} {rightTab==="logic"&&<LogicPanel formId={formId} fields={fields} onSaved={flash} onRulesChange={setLogicRules}/>} {rightTab==="share"&&<div className="settings-panel-content"><div className="settings-selected"><span>Public link</span><h2>Share form</h2></div><p>Publish the form, then generate a public link for respondents.</p><button className="button primary full" onClick={generateLink} disabled={!!busy}>{busy==="share"?"Generating...":"Generate share link"}</button>{shareUrl&&<div className="share-box"><input value={shareUrl} readOnly aria-label="Generated share URL"/><button className="button secondary" onClick={copyLink}>Copy</button></div>}</div>} {rightTab==="versions"&&<div className="settings-panel-content version-history-panel"><div className="settings-selected"><span>Published snapshots</span><h2>Version history</h2></div>{versions.length===0?<p className="muted">No versions published yet.</p>:<><div className="version-history-list">{visibleVersions.map(version=><div className="version-row version-row-action compact" key={version.id}><div><strong>Version {version.version_number}</strong><time>{version.created_at?new Date(version.created_at).toLocaleDateString():"Date unavailable"} · {version.response_count||0} {(version.response_count||0)===1?"response":"responses"}</time></div><span className={`status ${version.status}`}>{version.status}</span>{(version.response_count||0)>0?<Link className="version-response-link" to={`/responses/forms/${formId}?version=${version.id}`}>View Responses</Link>:<span className="version-no-responses">No responses</span>}</div>)}</div>{versions.length>5&&<button className="button secondary full version-toggle-button" type="button" onClick={()=>setShowAllVersions(value=>!value)}>{showAllVersions?"Show latest 5":"View all versions"}</button>}</>}</div>}</aside>
+    </div>
+
+    <div className="builder-col">
+      <div className="flex items-center" style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-surface-2)', flexWrap: 'wrap' }}>
+        <button className={`btn-ghost ${rightTab==="settings"?"active":""}`} style={{ flex: 1, padding: '12px 8px', border: 'none', borderBottom: rightTab==="settings"?'2px solid var(--brand-primary)':'2px solid transparent', fontSize: '13px', fontWeight: 600 }} onClick={()=>setRightTab("settings")}>{t('ui.field', `Field`)}</button>
+        <button className={`btn-ghost ${rightTab==="logic"?"active":""}`} style={{ flex: 1, padding: '12px 8px', border: 'none', borderBottom: rightTab==="logic"?'2px solid var(--brand-primary)':'2px solid transparent', fontSize: '13px', fontWeight: 600 }} onClick={()=>setRightTab("logic")}>{t('ui.logic', `Logic`)}</button>
+        <button className={`btn-ghost ${rightTab==="share"?"active":""}`} style={{ flex: 1, padding: '12px 8px', border: 'none', borderBottom: rightTab==="share"?'2px solid var(--brand-primary)':'2px solid transparent', fontSize: '13px', fontWeight: 600 }} onClick={()=>setRightTab("share")}>{t('ui.share', `Share`)}</button>
+        <button className={`btn-ghost ${rightTab==="history"?"active":""}`} style={{ flex: 1, padding: '12px 8px', border: 'none', borderBottom: rightTab==="history"?'2px solid var(--brand-primary)':'2px solid transparent', fontSize: '13px', fontWeight: 600 }} onClick={()=>setRightTab("history")}>{t('ui.history', `History`)}</button>
+      </div>
+      <div style={{ padding: '16px', overflowY: 'auto', flex: 1 }}>
+        {rightTab==="settings"&&<FieldSettings field={selectedField} formId={formId} reload={loadData} onSaved={flash}/>}
+        {rightTab==="logic"&&<LogicPanel formId={formId} fields={fields} onSaved={flash} onRulesChange={setLogicRules}/>}
+        {rightTab==="history"&&<VersionHistoryPanel versions={versions} />}
+        {rightTab==="share"&&<div className="flex-col gap-4"><div><h3 className="text-h3">{t('ui.share_form', `Share form`)}</h3><p className="text-body">{t('ui.generate_a_public_link_for_respondents', `Generate a public link for respondents.`)}</p></div><button className="btn btn-primary w-full" onClick={generateLink} disabled={!!busy}>{busy==="share"?"Generating...":"Generate Link"}</button>{shareUrl&&<div className="flex-col gap-2"><input className="input" value={shareUrl} readOnly/><button className="btn btn-secondary w-full" onClick={copyLink}>{t('ui.copy_link', `Copy Link`)}</button></div>}</div>}
+      </div>
     </div>
     <AddFieldSheet open={showAdd} onClose={()=>setShowAdd(false)} onAdd={type=>createField(type,FIELD_DEFAULTS[type])} busy={busy}/>
-    <ConfirmModal open={confirmDelete} title="Delete form?" message={`"${form.title}" will be permanently removed from your workspace.`} busy={busy==="delete-form"} confirmLabel="Delete Form" busyLabel="Deleting..." danger onConfirm={deleteForm} onCancel={()=>setConfirmDelete(false)}/>
-  </main>;
+    <ConfirmModal open={confirmDelete} title={t('ui.delete_form', `Delete form?`)} message={`"${form.title}" will be permanently removed from your workspace.`} busy={busy==="delete-form"} confirmLabel="Delete Form" busyLabel="Deleting..." danger onConfirm={deleteForm} onCancel={()=>setConfirmDelete(false)}/>
+    
+    {showDetails && (
+      <div className="modal-backdrop" role="presentation" onMouseDown={e => { if(e.target === e.currentTarget) setShowDetails(false); }}>
+        <form className="card add-field-modal" role="dialog" aria-modal="true" onSubmit={saveDetails} style={{ width: '100%', maxWidth: 480 }}>
+          <div className="section-heading" style={{ marginBottom: 24 }}>
+            <div>
+              <h2 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 4px 0', color: 'var(--text-primary)' }}>{t('ui.form_details', `Form Details`)}</h2>
+              <p style={{ margin: 0, fontSize: 14, color: 'var(--text-secondary)' }}>{t('ui.update_the_form_s_title_and_description', `Update the form's title and description.`)}</p>
+            </div>
+          </div>
+          <label style={{ display: 'block', marginBottom: 16, fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{t('ui.form_title', `Form Title`)}<input className="input" style={{ width: '100%', marginTop: 8 }} value={details.title} onChange={e => setDetails({...details, title: e.target.value})} required autoFocus />
+          </label>
+          <label style={{ display: 'block', marginBottom: 24, fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{t('ui.description', `Description`)}<textarea className="input" rows="3" style={{ width: '100%', marginTop: 8, resize: 'vertical' }} value={details.description} onChange={e => setDetails({...details, description: e.target.value})} placeholder={t('ui.optional_description', `Optional description...`)} />
+          </label>
+          <div className="form-actions" style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+            <button className="button ghost" type="button" onClick={() => setShowDetails(false)}>{t('ui.cancel', `Cancel`)}</button>
+            <button className="button primary" type="submit">{t('ui.save_details', `Save Details`)}</button>
+          </div>
+        </form>
+      </div>
+    )}
+  </div>;
 }
-
-
-
-
-
-

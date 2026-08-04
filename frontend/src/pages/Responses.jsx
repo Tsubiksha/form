@@ -1,191 +1,829 @@
-﻿import {useCallback,useEffect,useMemo,useRef,useState} from "react";
-import {Link,useParams,useSearchParams} from "react-router-dom";
-import {Area,AreaChart,ResponsiveContainer,Tooltip,XAxis} from "recharts";
-import {ArrowRight,BarChart3,Clock,Download,Eye,FileText,Inbox,Layers3,Paperclip,TrendingUp,X} from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Link, useParams } from "react-router-dom";
+import {
+  Search, SlidersHorizontal, Download, ChevronLeft, ChevronRight,
+  Inbox, Eye, X, Calendar, Clock, Check, ChevronDown, Filter,
+  RotateCcw, AlertCircle, Hash, Sparkles, FileText, Layers, Star,
+  Database, RefreshCw, ArrowRight, Image as ImageIcon
+} from "lucide-react";
 import API from "../services/api";
-import {useToast} from "../components/ToastProvider";
-import {apiMessage} from "../utils/errors";
-import {relativeTime} from "../utils/relativeTime";
+import { useToast } from "../components/ToastProvider";
+import { apiMessage } from "../utils/errors";
+import { relativeTime, formatDateTime } from "../utils/relativeTime";
 
-function countFiles(response){
-  return (response.values||[]).filter(item=>item.value&&typeof item.value==="object"&&item.value.stored_name).length;
-}
-function trend(items=[]){
-  const counts=new Map();
-  items.forEach(item=>{const key=new Date(item.submitted_at).toLocaleDateString(undefined,{month:"short",day:"numeric"});counts.set(key,(counts.get(key)||0)+1)});
-  return Array.from(counts.entries()).reverse().map(([date,responses])=>({date,responses}));
-}
-function versionCount(version){return Number(version.response_count||0)}
-function ValuePreview({item}){
-  const value=item.value;
-  if(Array.isArray(value))return value.join(", ");
-  if(value&&typeof value==="object"&&value.stored_name)return value.name||value.file_name||"Uploaded file";
-  return String(value??"No answer");
+// ── File Helpers & Lightbox Modal ────────────────────────────
+function isImageFile(val) {
+  if (!val) return false;
+  const name = val.file_name || val.name || val.stored_name || "";
+  const type = val.type || val.mime_type || "";
+  if (type.startsWith("image/")) return true;
+  return /\.(png|jpe?g|webp|gif|svg)$/i.test(name);
 }
 
-export default function Responses(){
-  const {formId}=useParams();
-  const [params,setParams]=useSearchParams();
-  const requestedVersion=params.get("version")||"";
-  const [data,setData]=useState({items:[],total:0,versions:[]});
-  const [loading,setLoading]=useState(true);
-  const [exporting,setExporting]=useState("");
-  const [error,setError]=useState("");
-  const [preview,setPreview]=useState(null);
-  const [previewLoading,setPreviewLoading]=useState(false);
-  const [compareOpen,setCompareOpen]=useState(false);
-  const [compareBase,setCompareBase]=useState("");
-  const [compareTarget,setCompareTarget]=useState("");
-  const [compareLoading,setCompareLoading]=useState(false);
-  const [compareError,setCompareError]=useState("");
-  const [compareResult,setCompareResult]=useState(null);
-  const [scrollState,setScrollState]=useState({left:false,right:false});
-  const versionListRef=useRef(null);
-  const toast=useToast();
+async function downloadFileAttachment(val, toast) {
+  if (!val || !val.download_url) {
+    if (toast) toast.error("File download link unavailable");
+    return;
+  }
+  try {
+    const { data } = await API.get(val.download_url, { responseType: "blob" });
+    const url = URL.createObjectURL(data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = val.name || val.file_name || "downloaded-file";
+    a.click();
+    URL.revokeObjectURL(url);
+    if (toast) toast.success("File downloaded");
+  } catch (err) {
+    if (toast) toast.error(apiMessage(err, "Failed to download file"));
+  }
+}
 
-  const load=useCallback(async()=>{
+function ImagePreviewModal({ imageVal, onClose, onDownload }) {
+  const { t } = useTranslation();
+  const [imgSrc, setImgSrc] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!imageVal) return;
+    if (imageVal.download_url) {
+      API.get(imageVal.download_url, { responseType: "blob" })
+        .then(r => {
+          setImgSrc(URL.createObjectURL(r.data));
+          setLoading(false);
+        })
+        .catch(() => setLoading(false));
+    } else if (imageVal.url) {
+      setImgSrc(imageVal.url);
+      setLoading(false);
+    }
+  }, [imageVal]);
+
+  if (!imageVal) return null;
+  const filename = imageVal.name || imageVal.file_name || "Image Preview";
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 9999,
+        background: 'rgba(15, 23, 42, 0.85)',
+        backdropFilter: 'blur(10px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24
+      }}
+      onClick={onClose}
+    >
+      <div style={{
+          background: 'var(--bg-surface)',
+          borderRadius: 16,
+          maxWidth: '90vw',
+          maxHeight: '90vh',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)'
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-surface-2)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>
+            <ImageIcon size={16} style={{ color: 'var(--brand-600)' }} />
+            <span>{filename}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => onDownload(imageVal)}
+            >
+              <Download size={14} />{t('ui.download', `Download`)}</button>
+            <button
+              className="btn-icon btn-ghost"
+              onClick={onClose}
+              style={{ width: 32, height: 32 }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        <div style={{ padding: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'auto', background: '#0f172a', minWidth: 340, minHeight: 260 }}>
+          {loading ? (
+            <div style={{ color: '#94a3b8', fontSize: 13 }}>{t('ui.loading_preview_image', `Loading preview image…`)}</div>
+          ) : imgSrc ? (
+            <img
+              src={imgSrc}
+              alt={filename}
+              style={{ maxWidth: '80vw', maxHeight: '75vh', objectFit: 'contain', borderRadius: 8 }}
+            />
+          ) : (
+            <div style={{ color: '#ef4444', fontSize: 13 }}>{t('ui.failed_to_load_image_preview', `Failed to load image preview`)}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Helpers ──────────────────────────────────────────────────
+function getFieldValue(resp, fieldId) {
+  if (!resp) return null;
+  if (Array.isArray(resp.values)) {
+    const found = resp.values.find(v => String(v.field_id) === String(fieldId));
+    if (found) return found.value;
+  }
+  const raw = resp.data || {};
+  return raw[String(fieldId)] ?? raw[fieldId] ?? null;
+}
+
+function renderCellValue(val, fieldType = "", onPreviewImage = null, onDownloadDoc = null, t = (k, f) => f) {
+  if (val === null || val === undefined || val === "") {
+    return <span style={{ color: 'var(--text-tertiary)', fontWeight: 500 }}>—</span>;
+  }
+
+  if (typeof val === "object" && val !== null) {
+    if (val.file_name || val.name || val.stored_name) {
+      const isImg = isImageFile(val);
+      const filename = val.name || val.file_name || val.stored_name || "Attachment";
+      return isImg ? (
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => onPreviewImage && onPreviewImage(val)}
+          title={t('ui.click_to_preview_image', `Click to preview image`)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '3px 10px',
+            background: 'var(--brand-50)',
+            color: 'var(--brand-700)',
+            border: '1px solid var(--brand-300)',
+            borderRadius: 8,
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            maxWidth: 180,
+            whiteSpace: 'nowrap'
+          }}
+        >
+          <ImageIcon size={13} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{filename}</span>
+          <Eye size={12} style={{ opacity: 0.8 }} />
+        </button>
+      ) : (
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => onDownloadDoc && onDownloadDoc(val)}
+          title={t('ui.click_to_download_document', `Click to download document`)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '3px 10px',
+            background: 'var(--info-50)',
+            color: 'var(--info-700)',
+            border: '1px solid var(--info-300)',
+            borderRadius: 8,
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            maxWidth: 180,
+            whiteSpace: 'nowrap'
+          }}
+        >
+          <FileText size={13} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{filename}</span>
+          <Download size={12} style={{ opacity: 0.8 }} />
+        </button>
+      );
+    }
+    if (Array.isArray(val)) {
+      return (
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {val.map((item, idx) => (
+            <span key={idx} style={{ padding: '2px 8px', background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', borderRadius: 6, fontSize: 11.5, fontWeight: 600 }}>
+              {String(item)}
+            </span>
+          ))}
+        </div>
+      );
+    }
+    return String(JSON.stringify(val));
+  }
+
+  const strVal = String(val).trim();
+  const lowerVal = strVal.toLowerCase();
+
+  // Boolean pills
+  if (lowerVal === "yes" || lowerVal === "true") {
+    return <span style={{ padding: '2px 10px', background: 'var(--success-50)', color: 'var(--success-700)', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>{t('ui.yes', `Yes`)}</span>;
+  }
+  if (lowerVal === "no" || lowerVal === "false") {
+    return <span style={{ padding: '2px 10px', background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>{t('ui.no', `No`)}</span>;
+  }
+
+  // Rating badge
+  if (fieldType === "rating" || (!isNaN(strVal) && Number(strVal) >= 1 && Number(strVal) <= 5 && fieldType === "rating")) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 8px', background: 'var(--warning-50)', color: 'var(--warning-800)', borderRadius: 6, fontSize: 12, fontWeight: 700 }}>
+        <Star size={11} style={{ fill: 'var(--warning-600)', color: 'var(--warning-600)' }} /> {strVal}
+      </span>
+    );
+  }
+
+  return <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{strVal}</span>;
+}
+
+// ── Date-range filter options ────────────────────────────────
+const DATE_RANGES = [
+  { label: "Any time", value: "" },
+  { label: "Today", value: "today" },
+  { label: "Last 7 days", value: "7d" },
+  { label: "Last 30 days", value: "30d" },
+  { label: "Last 90 days", value: "90d" },
+];
+
+function inDateRange(submittedAt, range) {
+  if (!range || !submittedAt) return true;
+  const d = new Date(submittedAt);
+  const now = new Date();
+  const msPerDay = 86400000;
+  switch (range) {
+    case "today": {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      return d >= start;
+    }
+    case "7d": return d >= new Date(now - 7 * msPerDay);
+    case "30d": return d >= new Date(now - 30 * msPerDay);
+    case "90d": return d >= new Date(now - 90 * msPerDay);
+    default: return true;
+  }
+}
+
+// ── Filter Panel Component ────────────────────────────────────
+function FilterPanel({ columns, filters, onChange, onReset, onClose, activeCount }) {
+  const { t } = useTranslation();
+  return (
+    <div className="resp-filter-panel" style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 1000, width: 360, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 12, boxShadow: '0 20px 25px -5px rgba(0,0,0,0.15)', overflow: 'hidden' }}>
+      <div className="resp-filter-header">
+        <div className="resp-filter-title">
+          <Filter size={14} />
+          <span>{t('ui.filter_responses', `Filter Responses`)}</span>
+          {activeCount > 0 && (
+            <span className="resp-filter-badge">{activeCount}</span>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {activeCount > 0 && (
+            <button className="btn btn-ghost btn-sm" onClick={onReset}>
+              <RotateCcw size={12} />{t('ui.reset', `Reset`)}</button>
+          )}
+          <button className="btn-icon btn-ghost" onClick={onClose} style={{ width: 28, height: 28 }}>
+            <X size={14} />
+          </button>
+        </div>
+      </div>
+
+      <div className="resp-filter-body" style={{ maxHeight: 320, overflowY: 'auto' }}>
+        {/* Date range */}
+        <div className="resp-filter-group">
+          <label className="resp-filter-label">
+            <Calendar size={12} />{t('ui.submitted_date', `Submitted Date`)}</label>
+          <div className="resp-filter-chips">
+            {DATE_RANGES.map(opt => (
+              <button
+                key={opt.value}
+                className={`resp-filter-chip ${filters.dateRange === opt.value ? "active" : ""}`}
+                onClick={() => onChange({ ...filters, dateRange: opt.value })}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Field value filters */}
+        {columns.length > 0 && (
+          <div className="resp-filter-group">
+            <label className="resp-filter-label">
+              <Hash size={12} />{t('ui.field_contains', `Field Contains`)}</label>
+            <div className="resp-filter-field-rows">
+              {columns.map(col => (
+                <div key={col.id} className="resp-filter-field-row">
+                  <span className="resp-filter-field-name">{col.label}</span>
+                  <input
+                    className="input resp-filter-field-input"
+                    placeholder={`Filter by ${col.label}…`}
+                    value={filters.fieldValues?.[col.id] || ""}
+                    onChange={e =>
+                      onChange({
+                        ...filters,
+                        fieldValues: { ...filters.fieldValues, [col.id]: e.target.value },
+                      })
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────
+export default function Responses() {
+  const { t } = useTranslation();
+  const { formId } = useParams();
+  const [forms, setForms] = useState([]);
+  const [selectedFormId, setSelectedFormId] = useState(formId || "");
+  const [responses, setResponses] = useState({ items: [], total: 0 });
+  const [formFields, setFormFields] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 30;
+
+  const [versions, setVersions] = useState([]);
+  const [selectedVersionId, setSelectedVersionId] = useState("");
+  const [exportingFormat, setExportingFormat] = useState("");
+
+  // Lightbox preview state
+  const [previewImageVal, setPreviewImageVal] = useState(null);
+
+  // Search & filter state
+  const [search, setSearch] = useState("");
+  const [showFilter, setShowFilter] = useState(false);
+  const [filters, setFilters] = useState({ dateRange: "", fieldValues: {} });
+  const filterRef = useRef(null);
+
+  const toast = useToast();
+
+  // Count active filters
+  const activeFilterCount = useMemo(() => {
+    let n = 0;
+    if (selectedVersionId) n++;
+    if (filters.dateRange) n++;
+    if (filters.fieldValues) {
+      n += Object.values(filters.fieldValues).filter(v => v && v.trim()).length;
+    }
+    return n;
+  }, [filters, selectedVersionId]);
+
+  // Close filter panel on outside click
+  useEffect(() => {
+    if (!showFilter) return;
+    const handler = e => {
+      if (filterRef.current && !filterRef.current.contains(e.target)) {
+        setShowFilter(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showFilter]);
+
+  // Load all forms for the dropdown
+  const loadForms = useCallback(async () => {
+    try {
+      const { data } = await API.get("/forms/", { params: { page: 1, page_size: 100 } });
+      const items = data.items || data;
+      setForms(items);
+      if (!selectedFormId && items.length > 0) {
+        setSelectedFormId(String(items[0].id));
+      }
+    } catch (error) {
+      toast.error(apiMessage(error, "Failed to load forms"));
+    }
+  }, [selectedFormId, toast]);
+
+  useEffect(() => { loadForms(); }, [loadForms]);
+
+  // Load responses & form schema
+  const loadData = useCallback(async () => {
+    const id = selectedFormId || formId;
+    if (!id) return;
     setLoading(true);
-    setError("");
-    try{
-      const requestParams={};
-      if(requestedVersion&&requestedVersion!=="all")requestParams.version_id=requestedVersion;
-      const response=await API.get(`/forms/${formId}/responses`,{params:requestParams});
-      setData(response.data);
-      if(!requestedVersion)setParams({version:"all"},{replace:true});
-    }catch(error){
-      const message=error.response?.status===403?"You do not have permission to view these responses.":error.response?.status===404?"Form not found.":apiMessage(error,"Unable to load responses");
-      setError(message);
-      toast.error(message);
-    }finally{setLoading(false)}
-  },[formId,requestedVersion,setParams,toast]);
+    try {
+      const [respRes, versionsRes, formRes] = await Promise.all([
+        API.get(`/forms/${id}/responses`, { params: { page, page_size: PAGE_SIZE, search, version_id: selectedVersionId || undefined } }),
+        API.get(`/forms/${id}/versions`).catch(() => ({ data: [] })),
+        API.get(`/forms/${id}`).catch(() => ({ data: {} })),
+      ]);
 
-  useEffect(()=>{load()},[load]);
+      setResponses(respRes.data || { items: [], total: 0 });
+      
+      const formVersions = (versionsRes.data && Array.isArray(versionsRes.data) && versionsRes.data.length > 0)
+        ? versionsRes.data
+        : (respRes.data?.versions || formRes.data?.versions || []);
+      
+      setVersions(formVersions);
 
-  const versions=data.versions||[];
-  const comparableVersions=versions.filter(version=>String(version.status||"").toLowerCase()==="published");
-  const selectedVersion=useMemo(()=>versions.find(version=>String(version.id)===String(requestedVersion)),[versions,requestedVersion]);
-  const allVersions=requestedVersion==="all";
-  const versionUnavailable=!loading&&requestedVersion&&!allVersions&&!selectedVersion&&!error;
-  const allVersionCount=versions.reduce((sum,version)=>sum+versionCount(version),0);
-  const latest=data.items[0]?.submitted_at;
-  const mostActive=useMemo(()=>{
-    const withResponses=versions.filter(version=>versionCount(version)>0);
-    if(!withResponses.length)return null;
-    return withResponses.reduce((best,item)=>{
-      if(versionCount(item)>versionCount(best))return item;
-      if(versionCount(item)===versionCount(best)&&Number(item.version_number||0)>Number(best.version_number||0))return item;
-      return best;
-    },withResponses[0]);
-  },[versions]);
-  const uploadCount=data.items.reduce((total,item)=>total+countFiles(item),0);
-  const selectedResponseCount=allVersions?Number(data.total||allVersionCount):Number(data.total||0);
-  const chartData=trend(data.items);
-  const canExport=selectedResponseCount>0&&!loading&&!versionUnavailable&&!error;
-  const canExportCsv=canExport&&!allVersions;
+      // Extract form fields from selected version or published version
+      let fields = [];
+      if (selectedVersionId) {
+        const vMatch = formVersions.find(v => String(v.id) === String(selectedVersionId));
+        fields = vMatch?.snapshot?.fields || [];
+      }
+      if (!fields.length) {
+        const snapshot = formVersions.find(v => v.status === "published")?.snapshot;
+        fields = snapshot?.fields?.length ? snapshot.fields : formRes.data?.fields || [];
+      }
+      setFormFields(fields);
+    } catch (error) {
+      toast.error(apiMessage(error, "Failed to load responses"));
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedFormId, formId, page, search, selectedVersionId, toast]);
 
-  const updateScrollState=useCallback(()=>{
-    const node=versionListRef.current;
-    if(!node)return;
-    setScrollState({left:node.scrollLeft>2,right:node.scrollLeft+node.clientWidth<node.scrollWidth-2});
-  },[]);
-  useEffect(()=>{updateScrollState();window.addEventListener("resize",updateScrollState);return()=>window.removeEventListener("resize",updateScrollState)},[versions.length,updateScrollState]);
-  useEffect(()=>{
-    const node=versionListRef.current;
-    if(!node)return;
-    const active=node.querySelector(".active");
-    active?.scrollIntoView({behavior:"smooth",block:"nearest",inline:"center"});
-    window.requestAnimationFrame(updateScrollState);
-  },[requestedVersion,versions.length,updateScrollState]);
-  const scrollVersions=direction=>versionListRef.current?.scrollBy({left:direction*260,behavior:"smooth"});
+  useEffect(() => { loadData(); }, [loadData]);
 
-  const download=async(type)=>{
-    if(!canExport)return toast.error("No responses available to export yet.");
-    if(type==="csv"&&allVersions)return toast.error("Select a specific version to export CSV.");
-    const key=`${type}-${requestedVersion||"latest"}`;
-    setExporting(key);
-    try{
-      const requestParams={};
-      if(requestedVersion&&requestedVersion!=="all")requestParams.version_id=requestedVersion;
-      const {data:blob}=await API.get(`/forms/${formId}/responses/export/${type}`,{params:requestParams,responseType:"blob"});
-      const ext={csv:"csv",excel:"xlsx",pdf:"pdf"}[type];
-      const url=URL.createObjectURL(blob);
-      const a=document.createElement("a");
-      a.href=url;
-      a.download=`responses${selectedVersion?`-version-${selectedVersion.version_number}`:""}.${ext}`;
+  // Handle Direct Version-Wise Export
+  const downloadExport = async (format) => {
+    const id = selectedFormId || formId;
+    if (!id) return toast.error("Please select a form to export");
+    setExportingFormat(format);
+    try {
+      const params = { format };
+      if (selectedVersionId) params.version_id = selectedVersionId;
+      const res = await API.get(`/forms/${id}/export`, { params, responseType: "blob" });
+      const ext = format === "json" ? "json" : "csv";
+      const verTag = selectedVersionId ? `-v${selectedVersionId}` : "";
+      const filename = `form-${id}${verTag}-export.${ext}`;
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
-      toast.success(`${type==="excel"?"Excel":type.toUpperCase()} Exported Successfully`);
-    }catch(error){toast.error(apiMessage(error,`Failed to Export ${type}`))}
-    finally{setExporting("")}
+      toast.success(`${format.toUpperCase()} export downloaded`);
+    } catch (err) {
+      toast.error(apiMessage(err, `Failed to download ${format.toUpperCase()} export`));
+    } finally {
+      setExportingFormat("");
+    }
   };
-  const chooseVersion=value=>setParams(value==="all"?{version:"all"}:{version:String(value)});
-  const latestVersions=[...versions].sort((a,b)=>Number(b.version_number||0)-Number(a.version_number||0)).slice(0,3);
-  const openPreview=async(response)=>{
-    setPreviewLoading(true);
-    try{const result=await API.get(`/forms/${formId}/responses/${response.id}`);setPreview(result.data)}
-    catch(error){toast.error(apiMessage(error,"Unable to load response preview"))}
-    finally{setPreviewLoading(false)}
+
+  // Columns — includes ALL form fields, prioritized by data presence
+  const columns = useMemo(() => {
+    if (!Array.isArray(formFields)) return [];
+    const items = responses.items || [];
+    const hasData = fId => items.some(resp => {
+      const val = getFieldValue(resp, String(fId));
+      return val !== null && val !== undefined && val !== "";
+    });
+    const sorted = [...formFields].sort((a, b) => {
+      const aHas = hasData(a.id) ? 1 : 0;
+      const bHas = hasData(b.id) ? 1 : 0;
+      return bHas - aHas;
+    });
+    return sorted.map(f => ({
+      id: String(f.id),
+      label: f.label || `Field ${f.id}`,
+      type: f.field_type || f.type || "text",
+    }));
+  }, [formFields, responses.items]);
+
+  // Client-side filter on top of search results
+  const visibleRows = useMemo(() => {
+    return (responses.items || []).filter(resp => {
+      // Version filter check form_version_id or version_id
+      const respVerId = resp.form_version_id || resp.version_id;
+      if (selectedVersionId && respVerId && String(respVerId) !== String(selectedVersionId)) return false;
+      // Date range filter
+      if (!inDateRange(resp.submitted_at, filters.dateRange)) return false;
+      // Field value filters
+      if (filters.fieldValues) {
+        for (const [colId, term] of Object.entries(filters.fieldValues)) {
+          if (!term || !term.trim()) continue;
+          const val = getFieldValue(resp, colId);
+          const rawDisplay = typeof val === "object" ? JSON.stringify(val) : String(val || "");
+          if (!rawDisplay.toLowerCase().includes(term.toLowerCase())) return false;
+        }
+      }
+      return true;
+    });
+  }, [responses.items, filters, selectedVersionId]);
+
+  const totalPages = Math.ceil((responses.total || 0) / PAGE_SIZE);
+  const currentForm = forms.find(f => String(f.id) === String(selectedFormId));
+
+  const resetFilters = () => {
+    setFilters({ dateRange: "", fieldValues: {} });
+    setSelectedVersionId("");
   };
-  const openCompare=()=>{
-    if(comparableVersions.length<2)return toast.error("At least two published versions are required.");
-    const sorted=[...comparableVersions].sort((a,b)=>Number(b.version_number||0)-Number(a.version_number||0));
-    setCompareTarget(String(sorted[0].id));
-    setCompareBase(String(sorted[1].id));
-    setCompareResult(null);
-    setCompareError("");
-    setCompareOpen(true);
-  };
-  const runCompare=async()=>{
-    if(!compareBase||!compareTarget||String(compareBase)===String(compareTarget)){setCompareError("Choose two different versions to compare.");return}
-    setCompareLoading(true);setCompareError("");
-    try{
-      const response=await API.get(`/forms/${formId}/versions/compare`,{params:{base_version_id:compareBase,target_version_id:compareTarget}});
-      setCompareResult(response.data);
-    }catch(error){setCompareError(apiMessage(error,"Unable to compare versions."))}
-    finally{setCompareLoading(false)}
-  };
-  const formatCompareValue=value=>Array.isArray(value)||value&&typeof value==="object"?JSON.stringify(value):String(value??"None");
 
-  return <main className="page-shell responses-page analytics-responses-page">
-    <Link className="back-link" to="/responses">← Back to Responses</Link>
-    <div className="response-breadcrumb"><Link to="/responses">Responses</Link><span>/</span><strong>{data.form?.title||"Form responses"}</strong></div>
-    <header className="response-analytics-hero">
-      <div><span className="eyebrow">Response analytics</span><h1>{data.form?.title||"Responses"}</h1><p>{selectedVersion?`Version ${selectedVersion.version_number} • Published ${selectedVersion.created_at?new Date(selectedVersion.created_at).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}):"date unavailable"}`:"All published versions"}</p><div className="response-hero-meta"><span>{selectedResponseCount} responses</span><span>{selectedVersion?.field_count??"All"} fields</span><span>{latest?`Latest ${relativeTime(latest)}`:"No submissions yet"}</span></div></div>
-      <div className="header-actions"><button className="button primary" onClick={()=>download("csv")} disabled={!!exporting||!canExportCsv} title={allVersions?"Select a specific version to export CSV":"Export CSV"}><Download/> {exporting.startsWith("csv")?"Exporting...":"CSV"}</button><button className="button secondary" onClick={()=>download("excel")} disabled={!!exporting||!canExport}><Download/> Excel</button><button className="button secondary" onClick={()=>download("pdf")} disabled={!!exporting||!canExport}><Download/> PDF</button></div>
-    </header>
+  return (
+    <div className="responses-page" style={{ display: 'flex', flexDirection: 'column', gap: 24, paddingBottom: 48 }}>
+      
+      {/* ── Dark Hero Command Header ── */}
+      <div style={{
+        background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%)',
+        borderRadius: 16,
+        padding: '28px 32px',
+        color: 'white',
+        position: 'relative',
+        overflow: 'hidden',
+        boxShadow: '0 20px 25px -5px rgba(15, 23, 42, 0.15)'
+      }}>
+        <div style={{ position: 'relative', zIndex: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 20 }}>
+          <div>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.12)', backdropFilter: 'blur(8px)', padding: '4px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>
+              <Sparkles size={14} style={{ color: '#a78bfa' }} />{t('ui.enterprise_response_explorer', `Enterprise Response Explorer`)}</div>
+            <h1 style={{ fontSize: 26, fontWeight: 800, color: 'white', letterSpacing: '-0.02em', margin: '0 0 6px 0' }}>
+              {currentForm ? currentForm.title : "Responses Command Center"}
+            </h1>
+            <p style={{ fontSize: 13.5, color: '#cbd5e1', margin: 0 }}>{t('ui.viewing_live_submissions', `Viewing live submissions ·`)}<strong>{responses.total || 0}</strong>{t('ui.total_records_captured_across_schema_fie', `total records captured across schema fields.`)}</p>
+          </div>
 
-    {error&&<div className="notice error">{error}</div>}
-    {versionUnavailable&&<div className="notice error">Selected version is unavailable.</div>}
-    <section className="version-selector-panel card" aria-label="Version selection">
-      <label>Version view<select value={allVersions?"all":requestedVersion} onChange={event=>chooseVersion(event.target.value)}><option value="all">All Versions — {selectedResponseCount} responses</option>{[...versions].sort((a,b)=>Number(b.version_number||0)-Number(a.version_number||0)).map(version=><option value={version.id} key={version.id}>Version {version.version_number} — {versionCount(version)} responses</option>)}</select></label>
-      <span className="compare-action-wrapper" title={comparableVersions.length<2?"At least two published versions are required.":"Compare two published versions"}>
-        <button className="button secondary" type="button" onClick={openCompare} disabled={comparableVersions.length<2} aria-label={comparableVersions.length<2?"Compare Versions unavailable. At least two published versions are required.":"Compare Versions"}><BarChart3/> Compare Versions</button>
-      </span>
-      <div className="version-shortcuts"><button className={allVersions?"active":""} onClick={()=>chooseVersion("all")}>All Versions</button>{latestVersions.map(version=><button key={version.id} className={String(version.id)===String(requestedVersion)?"active":""} onClick={()=>chooseVersion(version.id)}>V{version.version_number}</button>)}</div>
-    </section>
-    {allVersions&&<div className="notice info">All Versions includes responses from every published version. Select a specific version to export CSV.</div>}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Form Dropdown */}
+            {forms.length > 0 && (
+              <div style={{ position: 'relative' }}>
+                <select
+                  className="input"
+                  style={{
+                    height: 42,
+                    background: 'rgba(255,255,255,0.12)',
+                    borderColor: 'rgba(255,255,255,0.2)',
+                    color: 'white',
+                    fontWeight: 600,
+                    fontSize: 13,
+                    borderRadius: 10,
+                    paddingRight: 36
+                  }}
+                  value={selectedFormId}
+                  onChange={e => {
+                    setSelectedFormId(e.target.value);
+                    setSelectedVersionId("");
+                    setPage(1);
+                    setSearch("");
+                    resetFilters();
+                  }}
+                >
+                  {forms.map(f => (
+                    <option value={f.id} key={f.id} style={{ color: 'var(--text-primary)', background: 'var(--bg-surface)' }}>
+                      {f.title}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={14} style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: '#cbd5e1', pointerEvents: 'none' }} />
+              </div>
+            )}
 
-    {allVersions&&<section className="version-summary-grid modern">{versions.map(version=><article className="card version-summary-card" key={version.id}><span><Layers3/></span><div><strong>Version {version.version_number}</strong><small>Published {version.created_at?new Date(version.created_at).toLocaleDateString(undefined,{month:"short",day:"numeric"}):"Date unavailable"} • {version.field_count||0} fields</small></div><div className="version-response-bar"><i style={{width:`${Math.min(100,allVersionCount?versionCount(version)/allVersionCount*100:0)}%`}}/></div><b>{versionCount(version)} responses</b><button className="button secondary" onClick={()=>chooseVersion(version.id)}>View <ArrowRight/></button></article>)}</section>}
+            {/* Version Dropdown */}
+            <div style={{ position: 'relative' }}>
+              <select
+                className="input"
+                style={{
+                  height: 42,
+                  background: 'rgba(255,255,255,0.12)',
+                  borderColor: 'rgba(255,255,255,0.2)',
+                  color: 'white',
+                  fontWeight: 600,
+                  fontSize: 13,
+                  borderRadius: 10,
+                  paddingRight: 36
+                }}
+                value={selectedVersionId}
+                onChange={e => {
+                  setSelectedVersionId(e.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="" style={{ color: 'var(--text-primary)', background: 'var(--bg-surface)' }}>{t('ui.all_versions', `All Versions`)}</option>
+                {versions.map(v => (
+                  <option value={v.id} key={v.id} style={{ color: 'var(--text-primary)', background: 'var(--bg-surface)' }}>{t('ui.version', `Version`)}{v.version_number} ({v.status})
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={14} style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: '#cbd5e1', pointerEvents: 'none' }} />
+            </div>
 
-    <section className="response-analytics-kpis">
-      <article><span><Inbox/></span><strong>{selectedResponseCount}</strong><small>Total Responses</small></article>
-      <article><span><Clock/></span><strong>{latest?relativeTime(latest):"No submissions yet"}</strong><small>Latest Submission</small></article>
-      <article><span><TrendingUp/></span><strong>{allVersions?versions.length:(selectedVersion?.field_count||0)}</strong><small>{allVersions?"Published Versions":"Fields in Version"}</small></article>
-      <article><span><Paperclip/></span><strong>{uploadCount}</strong><small>Files Uploaded</small></article>
-    </section>
+            {/* Single Link to Export Center */}
+            <Link
+              to="/workspace/exports"
+              style={{
+                background: 'rgba(255,255,255,0.15)',
+                color: 'white',
+                border: '1px solid rgba(255,255,255,0.25)',
+                height: 42,
+                padding: '0 18px',
+                borderRadius: 10,
+                fontWeight: 600,
+                fontSize: 13,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                textDecoration: 'none',
+                backdropFilter: 'blur(8px)',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <Download size={15} />{t('ui.export_center', `Export Center`)}<ArrowRight size={14} />
+            </Link>
+          </div>
+        </div>
+      </div>
 
-    <section className="response-intelligence-grid">
-      <article className="card response-insights-card"><div className="dashboard-card-heading"><div><h2>Response Insights</h2><p>Quick version intelligence</p></div><BarChart3/></div><div className="insight-metric-list"><div><span>Most active version</span><strong>{mostActive?`Version ${mostActive.version_number}`:"No response data"}</strong></div><div><span>Latest submission</span><strong>{latest?relativeTime(latest):"No submissions yet"}</strong></div><div><span>Average completion time</span><strong>~{Math.max(1,Math.ceil((selectedVersion?.field_count||5)*0.35))} min</strong></div><div><span>Upload count</span><strong>{uploadCount}</strong></div></div></article>
-      <article className="card response-chart-card"><div className="dashboard-card-heading"><div><h2>Responses Over Time</h2><p>Daily submission activity</p></div><FileText/></div><div className="response-trend-chart">{chartData.length?<ResponsiveContainer width="100%" height={220}><AreaChart data={chartData}><defs><linearGradient id="responsesArea" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#635bff" stopOpacity={0.24}/><stop offset="95%" stopColor="#635bff" stopOpacity={0}/></linearGradient></defs><XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#98a2b3"}}/><Tooltip/><Area type="monotone" dataKey="responses" stroke="#635bff" strokeWidth={3} fill="url(#responsesArea)"/></AreaChart></ResponsiveContainer>:<div className="dashboard-empty">No trend data yet.</div>}</div></article>
-    </section>
+      {/* ── Unified Data Table Panel ── */}
+      <div className="responses-panel" style={{ background: 'var(--bg-surface)', borderRadius: 16, border: '1px solid var(--border-subtle)', boxShadow: '0 4px 12px rgba(0,0,0,0.03)', position: 'relative' }}>
+        
+        {/* Unified Master Toolbar */}
+        <div className="resp-toolbar" style={{ padding: '16px 24px', background: 'var(--bg-surface)', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div className="resp-toolbar-left" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            
+            {/* Search Input */}
+            <div className="resp-search-wrap">
+              <Search size={14} className="resp-search-icon" />
+              <input
+                type="text"
+                className="input resp-search"
+                placeholder={t('ui.search_submission_records', `Search submission records…`)}
+                value={search}
+                onChange={e => { setSearch(e.target.value); setPage(1); }}
+                style={{ width: 260, height: 38, borderRadius: 8 }}
+              />
+              {search && (
+                <button className="resp-search-clear" onClick={() => { setSearch(""); setPage(1); }}>
+                  <X size={11} />
+                </button>
+              )}
+            </div>
 
-    {!allVersions&&selectedVersion&&<section className="version-analytics-strip"><strong>Version {selectedVersion.version_number}</strong><span>Responses: {versionCount(selectedVersion)}</span><span>Fields: {selectedVersion.field_count||0}</span><span>Published: {selectedVersion.created_at?new Date(selectedVersion.created_at).toLocaleDateString(undefined,{month:"short",day:"numeric"}):"—"}</span><span>Latest Response: {latest?relativeTime(latest):"—"}</span></section>}
+            {/* Filter Toggle */}
+            <div className="resp-filter-wrap" ref={filterRef}>
+              <button
+                className={`btn btn-secondary resp-filter-btn ${showFilter ? "active" : ""} ${activeFilterCount > 0 ? "has-filters" : ""}`}
+                onClick={() => setShowFilter(v => !v)}
+                style={{ height: 38, borderRadius: 8, padding: '0 14px' }}
+              >
+                <SlidersHorizontal size={14} />{t('ui.filter', `Filter`)}{activeFilterCount > 0 && (
+                  <span className="resp-filter-count">{activeFilterCount}</span>
+                )}
+              </button>
 
-    <section className="card table-card modern-response-table"><div className="table-heading"><div><h2>Responses</h2><p>{selectedVersion?`Version ${selectedVersion.version_number} response stream`:"All version response stream"}</p></div></div>{loading?<div className="loading-row">Loading responses...</div>:data.items.length?<table><thead><tr><th>Response ID</th><th>Submitted</th><th>Version</th><th>Files</th><th>Status</th><th>Actions</th></tr></thead><tbody>{data.items.map(response=><tr key={response.id}><td><strong>#{response.id}</strong></td><td>{relativeTime(response.submitted_at)}</td><td>V{response.version_number||"Legacy"}</td><td>{countFiles(response)}</td><td><span className="status published">Submitted</span></td><td><div className="row-actions"><button onClick={()=>openPreview(response)}><Eye/> Preview</button><Link to={`${response.id}`}>Open</Link></div></td></tr>)}</tbody></table>:<div className="empty-state"><h2>No responses yet</h2><p>This version has not received any submissions.</p></div>}</section>
+              {showFilter && (
+                <FilterPanel
+                  columns={columns}
+                  filters={filters}
+                  onChange={f => { setFilters(f); setPage(1); }}
+                  onReset={resetFilters}
+                  onClose={() => setShowFilter(false)}
+                  activeCount={activeFilterCount}
+                />
+              )}
+            </div>
 
-    {compareOpen&&<aside className="response-preview-backdrop" onClick={()=>setCompareOpen(false)}><section className="version-compare-modal" onClick={event=>event.stopPropagation()}><button className="preview-close" onClick={()=>setCompareOpen(false)} aria-label="Close version comparison"><X/></button><span className="eyebrow">Version comparison</span><h2>Compare Versions</h2><div className="compare-select-grid"><label>Base Version<select value={compareBase} onChange={event=>setCompareBase(event.target.value)}>{comparableVersions.map(version=><option key={version.id} value={version.id} disabled={String(version.id)===String(compareTarget)}>Version {version.version_number}</option>)}</select></label><label>Compare With<select value={compareTarget} onChange={event=>setCompareTarget(event.target.value)}>{comparableVersions.map(version=><option key={version.id} value={version.id} disabled={String(version.id)===String(compareBase)}>Version {version.version_number}</option>)}</select></label></div>{compareError&&<div className="notice error">{compareError}</div>}<button className="button primary full" onClick={runCompare} disabled={compareLoading||!compareBase||!compareTarget||String(compareBase)===String(compareTarget)}>{compareLoading?"Comparing...":"Compare Versions"}</button>{compareResult&&<div className="compare-results"><div className="compare-summary-grid">{["base","target"].map(key=><article key={key}><span>{key==="base"?"Base":"Compare"}</span><strong>Version {compareResult[key].version_number}</strong><small>Published {compareResult[key].published_at?new Date(compareResult[key].published_at).toLocaleDateString():"Date unavailable"}</small><b>{compareResult[key].response_count} responses</b><small>Latest: {compareResult[key].latest_submission?relativeTime(compareResult[key].latest_submission):"No submissions"}</small><small>{compareResult[key].field_count} fields • {compareResult[key].files_uploaded} files • ~{compareResult[key].average_completion_time} min</small></article>)}</div><div className="compare-change-list"><h3>Changes</h3>{!compareResult.changes.added.length&&!compareResult.changes.removed.length&&!compareResult.changes.changed.length?<p className="muted">No structural changes were found between these versions.</p>:<><section><h4>Added</h4>{compareResult.changes.added.length?compareResult.changes.added.map(item=><p key={item.field_id} className="change-added">+ {item.label}</p>):<p className="muted">No fields added.</p>}</section><section><h4>Removed</h4>{compareResult.changes.removed.length?compareResult.changes.removed.map(item=><p key={item.field_id} className="change-removed">- {item.label}</p>):<p className="muted">No fields removed.</p>}</section><section><h4>Changed</h4>{compareResult.changes.changed.length?compareResult.changes.changed.map(item=><div className="changed-field" key={item.field_id}><strong>{item.label}</strong>{item.changes.map(change=><small key={change.type}>{change.label}: {formatCompareValue(change.before)} → {formatCompareValue(change.after)}</small>)}</div>):<p className="muted">No fields changed.</p>}</section></>}</div></div>}</section></aside>}
-    {(preview||previewLoading)&&<aside className="response-preview-backdrop" onClick={()=>setPreview(null)}><section className="response-preview-drawer" onClick={event=>event.stopPropagation()}><button className="preview-close" onClick={()=>setPreview(null)} aria-label="Close response preview"><X/></button>{previewLoading&&!preview?<div className="loading-row">Loading preview...</div>:preview&&<><span className="eyebrow">Response #{preview.id}</span><h2>{preview.form_name}</h2><div className="response-meta"><span>Version {preview.version_number}</span><span>{new Date(preview.submitted_at).toLocaleString()}</span></div><dl className="preview-answer-list">{preview.values.map(value=><div key={value.field_id}><dt>{value.field_label||`Field ${value.field_id}`}</dt><dd><ValuePreview item={value}/></dd></div>)}</dl><Link className="button primary" to={`${preview.id}`}>Open full response</Link></>}</section></aside>}
-  </main>;
+            {/* Active filter chips */}
+            {activeFilterCount > 0 && (
+              <div className="resp-active-chips">
+                {selectedVersionId && (
+                  <span className="resp-active-chip">
+                    <Layers size={11} />{t('ui.version', `Version`)}{versions.find(v => String(v.id) === String(selectedVersionId))?.version_number || selectedVersionId}
+                    <button onClick={() => setSelectedVersionId("")}><X size={10} /></button>
+                  </span>
+                )}
+                {filters.dateRange && (
+                  <span className="resp-active-chip">
+                    <Clock size={11} /> {DATE_RANGES.find(d => d.value === filters.dateRange)?.label}
+                    <button onClick={() => setFilters(f => ({ ...f, dateRange: "" }))}><X size={10} /></button>
+                  </span>
+                )}
+                {Object.entries(filters.fieldValues || {}).map(([id, val]) =>
+                  val ? (
+                    <span className="resp-active-chip" key={id}>
+                      <Hash size={11} /> {columns.find(c => c.id === id)?.label || id}: "{val}"
+                      <button onClick={() => setFilters(f => ({ ...f, fieldValues: { ...f.fieldValues, [id]: "" } }))}><X size={10} /></button>
+                    </span>
+                  ) : null
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Record Count & Page Control */}
+          <div className="resp-toolbar-right" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>{t('ui.showing', `Showing`)}{visibleRows.length}{t('ui.of', `of`)}{responses.total || 0}{t('ui.records', `records`)}</span>
+            <div className="resp-pagination" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button
+                className="btn-icon btn-ghost"
+                style={{ width: 32, height: 32, borderRadius: 6, border: '1px solid var(--border-subtle)' }}
+                disabled={page === 1}
+                onClick={() => setPage(p => p - 1)}
+                title={t('ui.previous_page', `Previous page`)}
+              >
+                <ChevronLeft size={15} />
+              </button>
+              <span style={{ fontSize: 12.5, fontWeight: 700, padding: '0 8px', color: 'var(--text-primary)' }}>
+                {page} / {totalPages || 1}
+              </span>
+              <button
+                className="btn-icon btn-ghost"
+                style={{ width: 32, height: 32, borderRadius: 6, border: '1px solid var(--border-subtle)' }}
+                disabled={responses.items.length < PAGE_SIZE || page >= totalPages}
+                onClick={() => setPage(p => p + 1)}
+                title={t('ui.next_page', `Next page`)}
+              >
+                <ChevronRight size={15} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Master Response Table */}
+        <div className="resp-table-wrapper">
+          <table className="resp-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th className="resp-th" style={{ width: 70, paddingLeft: 24 }}>{t('ui._id', `# ID`)}</th>
+                <th className="resp-th" style={{ whiteSpace: 'nowrap' }}><Clock size={12} style={{ display: 'inline', marginRight: 4 }} />{t('ui.submitted_at', `SUBMITTED AT`)}</th>
+                {columns.map(c => (
+                  <th key={c.id} className="resp-th" style={{ whiteSpace: 'nowrap' }}>{c.label}</th>
+                ))}
+                <th className="resp-th resp-sticky-action-th" style={{ position: 'sticky', right: 0, background: 'var(--bg-surface-2)', zIndex: 10, textAlign: 'right', paddingRight: 24, boxShadow: '-4px 0 8px rgba(0,0,0,0.03)' }}>{t('ui.action', `ACTION`)}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                Array.from({ length: 6 }).map((_, i) => (
+                  <tr key={i} className="resp-skeleton-row">
+                    <td colSpan={3 + columns.length} style={{ padding: 18 }}>
+                      <div className="resp-skeleton-line" style={{ width: `${60 + (i % 3) * 15}%`, height: 16, background: 'var(--bg-surface-2)', borderRadius: 4 }} />
+                    </td>
+                  </tr>
+                ))
+              ) : visibleRows.length === 0 ? (
+                <tr>
+                  <td colSpan={3 + columns.length}>
+                    <div className="resp-empty" style={{ padding: '48px 24px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                      {activeFilterCount > 0 || search ? (
+                        <>
+                          <AlertCircle size={40} style={{ color: 'var(--warning-500)' }} />
+                          <strong style={{ fontSize: 16, color: 'var(--text-primary)' }}>{t('ui.no_matching_responses_found', `No matching responses found`)}</strong>
+                          <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>{t('ui.try_clearing_your_search_term_or_version', `Try clearing your search term or version filter criteria.`)}</p>
+                          <button className="btn btn-secondary" onClick={() => { setSearch(""); resetFilters(); }} style={{ marginTop: 8 }}>
+                            <RotateCcw size={14} />{t('ui.clear_all_filters', `Clear All Filters`)}</button>
+                        </>
+                      ) : (
+                        <>
+                          <Inbox size={40} style={{ color: 'var(--text-tertiary)' }} />
+                          <strong style={{ fontSize: 16, color: 'var(--text-primary)' }}>{t('ui.no_submissions_recorded_yet', `No submissions recorded yet`)}</strong>
+                          <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>{t('ui.responses_will_appear_here_dynamically_a', `Responses will appear here dynamically as respondents fill out this form.`)}</p>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                visibleRows.map((resp) => (
+                  <tr key={resp.id} className="resp-row">
+                    <td className="resp-td" style={{ paddingLeft: 24 }}>
+                      <span className="resp-id-badge">#{resp.id}</span>
+                    </td>
+                    <td className="resp-td" style={{ whiteSpace: 'nowrap' }}>
+                      <div className="resp-date-cell" style={{ whiteSpace: 'nowrap' }}>
+                        <span className="resp-date-relative" style={{ whiteSpace: 'nowrap' }}>{relativeTime(resp.submitted_at)}</span>
+                        <span className="resp-date-absolute" style={{ whiteSpace: 'nowrap' }}>{formatDateTime(resp.submitted_at)}</span>
+                      </div>
+                    </td>
+                    {columns.map(c => {
+                      const raw = getFieldValue(resp, c.id);
+                      return (
+                        <td key={c.id} className="resp-td">
+                          {renderCellValue(raw, c.type, setPreviewImageVal, file => downloadFileAttachment(file, toast), t)}
+                        </td>
+                      );
+                    })}
+                    <td className="resp-td resp-sticky-action-td" style={{ position: 'sticky', right: 0, background: 'var(--bg-surface)', zIndex: 9, textAlign: 'right', paddingRight: 24, boxShadow: '-4px 0 8px rgba(0,0,0,0.03)' }}>
+                      <Link
+                        to={`/workspace/forms/${selectedFormId || formId}/responses/${resp.id}`}
+                        className="resp-view-btn"
+                        title={t('ui.view_full_response_detail', `View full response detail`)}
+                      >
+                        <Eye size={13} />
+                        <span>{t('ui.view', `View`)}</span>
+                      </Link>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Image Lightbox Preview Modal */}
+      <ImagePreviewModal
+        imageVal={previewImageVal}
+        onClose={() => setPreviewImageVal(null)}
+        onDownload={file => downloadFileAttachment(file, toast)}
+      />
+    </div>
+  );
 }
-
 

@@ -1,12 +1,13 @@
 import csv, io, json, math, re, uuid
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pathlib import Path
+from typing import List, Optional
 from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from fastapi.responses import FileResponse
-from sqlalchemy import asc, desc, func, or_
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
+from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import asc, cast, desc, func, or_, String
 from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
@@ -19,7 +20,7 @@ from app.models.field_option import FieldOption
 from app.models.form import Form
 from app.models.form_version import FormVersion
 from app.models.share_link import ShareLink
-from app.models.submission import FormSubmission
+from app.models.submission import FormSubmission, SubmissionValue
 from app.models.user import User, UserRole
 from app.models.validation_rule import ValidationRule
 from app.schemas.field import FieldCreate, FieldOptionCreate, FieldOptionUpdate, FieldReorderRequest, OptionReorderRequest, FieldUpdate
@@ -604,19 +605,62 @@ def generate_link(form_id: int, db: Session = Depends(get_db), user: User = Depe
     return {"message":"Shareable link generated","form_id":form_id,"form_version_id":version.id,"link_token":link.link_token,"share_url":f"/f/{link.link_token}"}
 
 @router.get("/{form_id}/responses")
-def responses(form_id: int, page:int=Query(1,ge=1), page_size:int=Query(20,ge=1,le=100), version_id:int|None=Query(None), db:Session=Depends(get_db), user:User=Depends(get_current_user)):
-    form=owned_form(db,form_id,user)
-    selected_version=None
+def responses(
+    form_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    version_id: int | None = Query(None),
+    search: str | None = Query(None, description="Search by response ID or field value"),
+    date_from: str | None = Query(None, description="ISO date string YYYY-MM-DD"),
+    date_to: str | None = Query(None, description="ISO date string YYYY-MM-DD"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    form = owned_form(db, form_id, user)
+    selected_version = None
     if version_id:
-        selected_version=db.query(FormVersion).filter_by(id=version_id,form_id=form_id).first()
+        selected_version = db.query(FormVersion).filter_by(id=version_id, form_id=form_id).first()
         if not selected_version: raise HTTPException(404, "Form version not found")
-    q=db.query(FormSubmission).filter_by(form_id=form_id)
-    if version_id: q=q.filter(FormSubmission.form_version_id==version_id)
-    q=q.order_by(FormSubmission.submitted_at.desc()); total=q.count()
-    items=q.offset((page-1)*page_size).limit(page_size).all()
-    current_version=latest_published_version(db,form_id)
-    version_map={version.id:version for version in db.query(FormVersion).filter_by(form_id=form_id).all()}
-    return {"form":{"id":form.id,"title":form.title,"status":form.status},"items":[serialize_submission(s,selected_version or version_map.get(s.form_version_id)) for s in items],"versions":form_versions_payload(db,form_id),"selected_version_id":version_id,"current_version_id":current_version.id if current_version else None,"total":total,"page":page,"page_size":page_size,"pages":math.ceil(total/page_size) if total else 0}
+    q = db.query(FormSubmission).filter(FormSubmission.form_id == form_id, FormSubmission.is_archived.is_(False))
+    if version_id: q = q.filter(FormSubmission.form_version_id == version_id)
+    if search:
+        term = f"%{search}%"
+        q = q.filter(
+            or_(
+                cast(FormSubmission.id, String).ilike(term),
+                FormSubmission.id.in_(
+                    db.query(SubmissionValue.submission_id)
+                    .filter(SubmissionValue.value.ilike(term))
+                    .filter(SubmissionValue.submission_id.in_(db.query(FormSubmission.id).filter(FormSubmission.form_id == form_id)))
+                )
+            )
+        )
+    if date_from:
+        try:
+            q = q.filter(FormSubmission.submitted_at >= datetime.fromisoformat(date_from))
+        except ValueError:
+            raise HTTPException(400, "Invalid date_from format. Use YYYY-MM-DD.")
+    if date_to:
+        try:
+            q = q.filter(FormSubmission.submitted_at < datetime.fromisoformat(date_to) + timedelta(days=1))
+        except ValueError:
+            raise HTTPException(400, "Invalid date_to format. Use YYYY-MM-DD.")
+    q = q.order_by(FormSubmission.submitted_at.desc())
+    total = q.count()
+    items = q.offset((page - 1) * page_size).limit(page_size).all()
+    current_version = latest_published_version(db, form_id)
+    version_map = {version.id: version for version in db.query(FormVersion).filter_by(form_id=form_id).all()}
+    return {
+        "form": {"id": form.id, "title": form.title, "status": form.status},
+        "items": [serialize_submission(s, selected_version or version_map.get(s.form_version_id)) for s in items],
+        "versions": form_versions_payload(db, form_id),
+        "selected_version_id": version_id,
+        "current_version_id": current_version.id if current_version else None,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": math.ceil(total / page_size) if total else 0,
+    }
 
 @router.get("/{form_id}/responses/export.csv")
 @router.get("/{form_id}/responses/export/csv")
@@ -710,18 +754,434 @@ def export_pdf(form_id:int,version_id:int|None=Query(None),db:Session=Depends(ge
     pdf.save(); return Response(output.getvalue(),media_type="application/pdf",headers={"Content-Disposition":f'attachment; filename="form-{form_id}-responses.pdf"'})
 
 @router.get("/{form_id}/responses/{response_id}")
-def response_detail(form_id:int,response_id:int,db:Session=Depends(get_db),user:User=Depends(get_current_user)):
-    form=owned_form(db,form_id,user); s=db.query(FormSubmission).filter_by(id=response_id,form_id=form_id).first()
-    if not s: raise HTTPException(404,"Response not found")
-    version=db.get(FormVersion,s.form_version_id)
-    payload=serialize_submission(s,version)
-    payload.update({"form_name":(version.snapshot.get("title") if version else None) or form.title,"version_number":version.version_number if version else None})
+def response_detail(form_id: int, response_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    form = owned_form(db, form_id, user)
+    s = db.query(FormSubmission).filter_by(id=response_id, form_id=form_id).first()
+    if not s: raise HTTPException(404, "Response not found")
+    version = db.get(FormVersion, s.form_version_id)
+    payload = serialize_submission(s, version)
+    payload.update({
+        "form_name": (version.snapshot.get("title") if version else None) or form.title,
+        "version_number": version.version_number if version else None,
+        "started_at": s.started_at,
+        "completion_time_seconds": int((s.submitted_at - s.started_at).total_seconds()) if s.started_at else None,
+    })
     return payload
 
+
 @router.get("/{form_id}/uploads/{stored_name}")
-def download_upload(form_id:int,stored_name:str,db:Session=Depends(get_db),user:User=Depends(get_current_user)):
-    owned_form(db,form_id,user)
+def download_upload(form_id: int, stored_name: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    owned_form(db, form_id, user)
     safe_name = Path(stored_name).name
     path = Path(settings.upload_dir) / f"form_{form_id}" / safe_name
     if not path.exists() or not path.is_file(): raise HTTPException(404, "Uploaded file not found")
     return FileResponse(path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Day 14 — Per-form Analytics
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/{form_id}/analytics")
+def form_analytics(form_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Return per-form analytics: submission counts, completion rate, avg time, field stats, trend."""
+    form = owned_form(db, form_id, user)
+    current_version = latest_published_version(db, form_id)
+
+    # Total submissions (non-archived)
+    all_submissions = (
+        db.query(FormSubmission)
+        .filter(FormSubmission.form_id == form_id, FormSubmission.is_archived.is_(False))
+        .order_by(FormSubmission.submitted_at.desc())
+        .all()
+    )
+    total_submissions = len(all_submissions)
+
+    # Average completion time (only where started_at is set)
+    timed = [s for s in all_submissions if s.started_at]
+    avg_time_seconds = None
+    if timed:
+        total_secs = sum(int((s.submitted_at - s.started_at).total_seconds()) for s in timed if s.submitted_at > s.started_at)
+        avg_time_seconds = round(total_secs / len(timed)) if timed else None
+
+    # Completion rate (timed submissions that completed vs those that opened)
+    total_opens = db.query(func.count(FormSubmission.id)).filter(
+        FormSubmission.form_id == form_id, FormSubmission.started_at.isnot(None)
+    ).scalar() or 0
+    completion_rate = round(total_submissions / total_opens * 100, 1) if total_opens > 0 else None
+
+    # Submissions by day (last 30 days)
+    from collections import Counter
+    cutoff = datetime.utcnow() - timedelta(days=30)
+    recent = [s for s in all_submissions if s.submitted_at and s.submitted_at >= cutoff]
+    date_counts = Counter(s.submitted_at.date() for s in recent)
+    days_30 = [date.today() - timedelta(days=i) for i in range(29, -1, -1)]
+    submissions_by_day = [{"date": d.strftime("%b %d"), "submissions": date_counts.get(d, 0)} for d in days_30]
+
+    # Latest submissions (5)
+    version_map = {v.id: v for v in db.query(FormVersion).filter_by(form_id=form_id).all()}
+    latest_submissions = [
+        {
+            "id": s.id,
+            "submitted_at": s.submitted_at,
+            "version_number": version_map.get(s.form_version_id, None) and version_map[s.form_version_id].version_number,
+            "completion_time_seconds": int((s.submitted_at - s.started_at).total_seconds()) if s.started_at else None,
+        }
+        for s in all_submissions[:5]
+    ]
+
+    # Per-field statistics (using current version snapshot)
+    field_stats = []
+    if current_version and current_version.snapshot:
+        fields = current_version.snapshot.get("fields", [])
+        version_submissions = [s for s in all_submissions if s.form_version_id == current_version.id]
+        for field in fields:
+            fid = field.get("id")
+            ftype = field.get("field_type", "")
+            responses_for_field = []
+            null_count = 0
+            for sub in version_submissions:
+                val_obj = next((v for v in sub.values if v.field_id == fid), None)
+                if val_obj and val_obj.value:
+                    try:
+                        parsed = json.loads(val_obj.value)
+                    except Exception:
+                        parsed = val_obj.value
+                    responses_for_field.append(parsed)
+                else:
+                    null_count += 1
+            distribution = {}
+            if ftype in {"dropdown", "radio", "multi_select", "checkbox_group"}:
+                dist_counter = Counter()
+                for v in responses_for_field:
+                    if isinstance(v, list):
+                        for item in v:
+                            dist_counter[str(item)] += 1
+                    else:
+                        dist_counter[str(v)] += 1
+                distribution = dict(dist_counter.most_common(20))
+            elif ftype == "rating":
+                dist_counter = Counter()
+                for v in responses_for_field:
+                    try:
+                        dist_counter[str(int(float(v)))] += 1
+                    except (TypeError, ValueError):
+                        pass
+                distribution = dict(dist_counter)
+            field_stats.append({
+                "field_id": fid,
+                "label": field.get("label"),
+                "field_type": ftype,
+                "response_count": len(responses_for_field),
+                "null_count": null_count,
+                "distribution": distribution,
+            })
+
+    return {
+        "form_id": form_id,
+        "form_title": form.title,
+        "total_submissions": total_submissions,
+        "total_opens": total_opens,
+        "completion_rate": completion_rate,
+        "avg_completion_time_seconds": avg_time_seconds,
+        "submissions_by_day": submissions_by_day,
+        "latest_submissions": latest_submissions,
+        "field_stats": field_stats,
+        "current_version_id": current_version.id if current_version else None,
+        "current_version_number": current_version.version_number if current_version else None,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Day 15 — Unified Export (JSON + streaming CSV)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/{form_id}/export")
+def export_form_responses(
+    form_id: int,
+    format: str = Query("csv", description="Export format: csv, json, excel, pdf"),
+    version_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Unified export endpoint supporting csv, json, excel, pdf formats."""
+    owned_form(db, form_id, user)
+    fmt = format.lower()
+    if fmt == "csv":
+        if version_id:
+            version = db.query(FormVersion).filter_by(id=version_id, form_id=form_id).first()
+            if not version: raise HTTPException(404, "Form version not found")
+            submissions = db.query(FormSubmission).filter_by(form_id=form_id, form_version_id=version_id).order_by(FormSubmission.submitted_at).all()
+            fields, rows = version_specific_rows(version, submissions)
+
+            def generate_csv():
+                output = io.StringIO()
+                writer = csv.writer(output)
+                writer.writerow(["Response ID", "Version Number", "Submitted At"] + [f.get("label") for f in fields])
+                output.seek(0); yield output.read(); output.seek(0); output.truncate(0)
+                for row in rows:
+                    writer.writerow(row)
+                    output.seek(0); yield output.read(); output.seek(0); output.truncate(0)
+
+            return StreamingResponse(
+                generate_csv(),
+                media_type="text/csv",
+                headers={"Content-Disposition": f'attachment; filename="form-{form_id}-v{version.version_number}-export.csv"'},
+            )
+        else:
+            submissions = db.query(FormSubmission).filter_by(form_id=form_id).order_by(FormSubmission.submitted_at).all()
+
+            def generate_all_csv():
+                output = io.StringIO()
+                writer = csv.writer(output)
+                writer.writerow(["Response ID", "Version Number", "Submitted At", "Answers"])
+                output.seek(0); yield output.read(); output.seek(0); output.truncate(0)
+                for row in all_versions_rows(db, form_id, submissions):
+                    writer.writerow(row)
+                    output.seek(0); yield output.read(); output.seek(0); output.truncate(0)
+
+            return StreamingResponse(
+                generate_all_csv(),
+                media_type="text/csv",
+                headers={"Content-Disposition": f'attachment; filename="form-{form_id}-export.csv"'},
+            )
+    elif fmt == "json":
+        q = db.query(FormSubmission).filter_by(form_id=form_id).order_by(FormSubmission.submitted_at)
+        if version_id: q = q.filter(FormSubmission.form_version_id == version_id)
+        submissions = q.all()
+        version_map = {v.id: v for v in db.query(FormVersion).filter_by(form_id=form_id).all()}
+        result = []
+        for s in submissions:
+            v = version_map.get(s.form_version_id)
+            fields = version_field_lookup(v)
+            result.append({
+                "id": s.id,
+                "form_id": s.form_id,
+                "form_version_id": s.form_version_id,
+                "version_number": v.version_number if v else None,
+                "submitted_at": s.submitted_at.isoformat() if s.submitted_at else None,
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "completion_time_seconds": int((s.submitted_at - s.started_at).total_seconds()) if s.started_at else None,
+                "values": [
+                    {
+                        "field_id": val.field_id,
+                        "field_label": fields.get(val.field_id, {}).get("label"),
+                        "field_type": fields.get(val.field_id, {}).get("field_type"),
+                        "value": json.loads(val.value) if val.value else None,
+                    }
+                    for val in s.values
+                ],
+            })
+        content = json.dumps(result, ensure_ascii=False, indent=2, default=str)
+        return Response(
+            content,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="form-{form_id}-export.json"'},
+        )
+    elif fmt in ("excel", "xlsx"):
+        return export_excel(form_id, version_id, db, user)
+    elif fmt == "pdf":
+        return export_pdf(form_id, version_id, db, user)
+    else:
+        raise HTTPException(400, f"Unsupported export format: {fmt}. Use csv, json, excel, or pdf.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Day 18 — Duplicate Form
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/{form_id}/duplicate", status_code=201)
+def duplicate_form(form_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Duplicate a form with all fields, options, validation rules and conditional rules. Does NOT copy submissions."""
+    if user.role == UserRole.ADMIN:
+        raise HTTPException(403, "Platform administrators cannot duplicate user forms")
+    source = owned_form(db, form_id, user)
+
+    # 1. Create new form
+    new_form = Form(
+        title=f"{source.title} (Copy)",
+        description=source.description,
+        user_id=user.id,
+        created_by=user.id,
+        updated_by=user.id,
+        status="draft",
+    )
+    db.add(new_form)
+    db.flush()
+
+    # 2. Duplicate fields + options + validation rules, tracking old→new field ID mapping
+    old_to_new_field_id: dict[int, int] = {}
+    for old_field in sorted(source.fields, key=lambda f: f.display_order):
+        new_field = Field(
+            form_id=new_form.id,
+            label=old_field.label,
+            field_type=old_field.field_type,
+            required=old_field.required,
+            placeholder=old_field.placeholder,
+            help_text=old_field.help_text,
+            display_order=old_field.display_order,
+        )
+        db.add(new_field)
+        db.flush()
+        old_to_new_field_id[old_field.id] = new_field.id
+
+        for opt in old_field.options:
+            db.add(FieldOption(
+                field_id=new_field.id,
+                option_label=opt.option_label,
+                option_value=opt.option_value,
+                display_order=opt.display_order,
+            ))
+        for rule in old_field.validation_rules:
+            db.add(ValidationRule(
+                field_id=new_field.id,
+                rule_type=rule.rule_type,
+                rule_value=rule.rule_value,
+                error_message=rule.error_message,
+            ))
+
+    # 3. Duplicate conditional rules using new field IDs
+    old_rules = db.query(ConditionalRule).filter_by(form_id=source.id).all()
+    for rule in old_rules:
+        new_trigger = old_to_new_field_id.get(rule.trigger_field_id)
+        new_target = old_to_new_field_id.get(rule.target_field_id)
+        if new_trigger and new_target:
+            db.add(ConditionalRule(
+                form_id=new_form.id,
+                trigger_field_id=new_trigger,
+                operator=rule.operator,
+                comparison_value=rule.comparison_value,
+                target_field_id=new_target,
+                action=rule.action,
+            ))
+
+    audit(db, user, "form.duplicated", "form", new_form.id, {"source_form_id": source.id})
+    db.commit()
+    db.refresh(new_form)
+    return {
+        "message": "Form duplicated successfully",
+        "form_id": new_form.id,
+        "title": new_form.title,
+        "field_count": len(new_form.fields),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Day 19 — Bulk Delete + Retention
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/{form_id}/responses/bulk-delete", status_code=200)
+def bulk_delete_responses(
+    form_id: int,
+    response_ids: List[int] = Body(..., embed=True),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Permanently delete a list of responses by ID. Requires ownership of the form."""
+    form = owned_form(db, form_id, user)
+    if not response_ids:
+        raise HTTPException(400, "Provide at least one response ID to delete")
+    if len(response_ids) > 500:
+        raise HTTPException(400, "Maximum 500 responses can be deleted at once")
+    deleted = 0
+    for rid in response_ids:
+        s = db.query(FormSubmission).filter_by(id=rid, form_id=form_id).first()
+        if s:
+            db.delete(s)
+            deleted += 1
+    audit(db, user, "responses.bulk_deleted", "form", form.id, {"deleted_count": deleted, "requested_ids": response_ids})
+    db.commit()
+    return {"message": f"{deleted} response(s) deleted successfully", "deleted_count": deleted}
+
+
+@router.get("/{form_id}/responses/retention")
+def get_retention(form_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Return the count of responses eligible for archiving (older than a given threshold)."""
+    owned_form(db, form_id, user)
+    for_30 = db.query(FormSubmission).filter(
+        FormSubmission.form_id == form_id,
+        FormSubmission.submitted_at < datetime.utcnow() - timedelta(days=30),
+        FormSubmission.is_archived.is_(False),
+    ).count()
+    for_90 = db.query(FormSubmission).filter(
+        FormSubmission.form_id == form_id,
+        FormSubmission.submitted_at < datetime.utcnow() - timedelta(days=90),
+        FormSubmission.is_archived.is_(False),
+    ).count()
+    return {
+        "form_id": form_id,
+        "eligible_30_days": for_30,
+        "eligible_90_days": for_90,
+        "message": "Responses older than the threshold can be archived or deleted.",
+    }
+
+
+@router.post("/{form_id}/responses/retention")
+def apply_retention(
+    form_id: int,
+    older_than_days: int = Body(..., embed=True),
+    action: str = Body("archive", embed=True),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Archive or delete responses older than older_than_days days."""
+    form = owned_form(db, form_id, user)
+    if older_than_days < 1:
+        raise HTTPException(400, "older_than_days must be at least 1")
+    if action not in ("archive", "delete"):
+        raise HTTPException(400, "action must be 'archive' or 'delete'")
+    cutoff = datetime.utcnow() - timedelta(days=older_than_days)
+    q = db.query(FormSubmission).filter(
+        FormSubmission.form_id == form_id,
+        FormSubmission.submitted_at < cutoff,
+        FormSubmission.is_archived.is_(False),
+    )
+    affected = q.all()
+    count = len(affected)
+    now = datetime.utcnow()
+    if action == "archive":
+        for s in affected:
+            s.is_archived = True
+            s.archived_at = now
+        audit(db, user, "responses.archived", "form", form.id, {"archived_count": count, "older_than_days": older_than_days})
+        db.commit()
+        return {"message": f"{count} response(s) archived", "affected_count": count, "action": "archive"}
+    else:
+        for s in affected:
+            db.delete(s)
+        audit(db, user, "responses.deleted_by_retention", "form", form.id, {"deleted_count": count, "older_than_days": older_than_days})
+        db.commit()
+        return {"message": f"{count} response(s) permanently deleted", "affected_count": count, "action": "delete"}
+@router.get("/{form_id}/exports")
+def list_form_exports(form_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    owned_form(db, form_id, current_user)
+    from app.models.export_job import ExportJob
+    jobs = db.query(ExportJob).filter(ExportJob.form_id == form_id).order_by(desc(ExportJob.created_at)).all()
+    return [{
+        "id": job.id,
+        "form_id": job.form_id,
+        "format": job.format,
+        "status": job.status,
+        "file_url": job.file_url,
+        "created_at": job.created_at,
+        "completed_at": job.completed_at
+    } for job in jobs]
+
+@router.get("/exports/history")
+def list_all_exports(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.models.export_job import ExportJob
+    query = db.query(ExportJob, Form.title.label("form_title"))\
+              .join(Form, Form.id == ExportJob.form_id)
+    if current_user.role != UserRole.ADMIN:
+        query = query.filter(Form.user_id == current_user.id)
+    
+    jobs = query.order_by(desc(ExportJob.created_at)).all()
+    return [{
+        "id": job.ExportJob.id,
+        "form_title": job.form_title,
+        "format": job.ExportJob.format,
+        "status": job.ExportJob.status,
+        "file_url": job.ExportJob.file_url,
+        "created_at": job.ExportJob.created_at,
+        "completed_at": job.ExportJob.completed_at
+    } for job in jobs]

@@ -1,30 +1,178 @@
-import {useCallback,useEffect,useState} from "react";
-import {Activity,Archive,CheckCircle2,ChevronLeft,ChevronRight,FilePlus2,FileX2,RefreshCw,Search,UserCheck,UserX} from "lucide-react";
-import {Area,AreaChart,Bar,BarChart,CartesianGrid,Cell,Legend,Pie,PieChart,ResponsiveContainer,Tooltip,XAxis,YAxis} from "recharts";
+import { useTranslation } from "react-i18next";
+import { useEffect, useState, useRef } from "react";
+import { Link } from "react-router-dom";
+import {
+  Activity, Download, BarChart3, Users, ChevronRight, FileText
+} from "lucide-react";
+import {
+  Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, 
+  Tooltip, XAxis, YAxis, LineChart, Line
+} from "recharts";
 import API from "../services/api";
-import {useToast} from "../components/ToastProvider";
-import {apiMessage} from "../utils/errors";
-import {relativeTime} from "../utils/relativeTime";
+import { useToast } from "../components/ToastProvider";
+import { apiMessage } from "../utils/errors";
+import { Card, CardBody, CardHeader } from "../components/ui/Card";
+import { Table, TableBody, TableCell, TableHeader, TableRow } from "../components/ui/Table";
 
-const COLORS=["#8b5cf6","#10b981","#f59e0b"];const roleColors=["#4f46e5","#06b6d4"];
-const filters=[['','All actions'],['created','Created'],['updated','Updated'],['published','Published'],['deleted','Deleted'],['archived','Archived'],['user_activated','User Activated'],['user_deactivated','User Deactivated']];
-function activityMeta(action=""){if(action.includes("deactivated"))return {Icon:UserX,label:"User Deactivated",tone:"orange"};if(action.includes("activated"))return {Icon:UserCheck,label:"User Activated",tone:"green"};if(action.includes("publish"))return {Icon:CheckCircle2,label:"Published",tone:"purple"};if(action.includes("delete"))return {Icon:FileX2,label:"Deleted",tone:"red"};if(action.includes("archive"))return {Icon:Archive,label:"Archived",tone:"gray"};if(action.includes("update"))return {Icon:RefreshCw,label:"Updated",tone:"blue"};if(action.includes("creat"))return {Icon:FilePlus2,label:"Created",tone:"green"};return {Icon:Activity,label:"Activity",tone:"gray"}}
-function ChartCard({title,subtitle,children}){return <section className="admin-panel chart-card"><div className="panel-heading"><div><h2>{title}</h2><p>{subtitle}</p></div></div><div className="chart-wrap">{children}</div></section>}
+const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 
-export default function AdminAnalytics(){
-  const [data,setData]=useState(null);const [activity,setActivity]=useState({items:[],total:0});const [page,setPage]=useState(1);const [activityLoading,setActivityLoading]=useState(true);const [controls,setControls]=useState({search:"",action:"",sort:"desc"});const toast=useToast();
-  useEffect(()=>{API.get("/dashboard/admin").then(r=>setData(r.data)).catch(e=>toast.error(apiMessage(e,"Unable to load analytics")))},[toast]);
-  const loadActivity=useCallback(()=>{setActivityLoading(true);API.get("/admin/activity",{params:{page,page_size:25,search:controls.search||undefined,action:controls.action||undefined,sort:controls.sort}}).then(r=>setActivity(r.data)).catch(e=>toast.error(apiMessage(e,"Unable to load activity"))).finally(()=>setActivityLoading(false))},[controls,page,toast]);
-  useEffect(()=>{const timer=setTimeout(loadActivity,200);return()=>clearTimeout(timer)},[loadActivity]);
-  useEffect(()=>{if(data&&window.location.hash==="#activity")setTimeout(()=>document.getElementById("activity")?.scrollIntoView({behavior:"smooth"}),100)},[data]);
-  const update=(key,value)=>{setPage(1);setControls(current=>({...current,[key]:value}))};const pages=Math.max(1,Math.ceil(activity.total/25));
-  if(!data)return <main className="page-shell admin-page"><div className="skeleton chart-skeleton"/></main>;
-  return <main className="page-shell admin-page"><header className="admin-page-header"><div><span className="eyebrow">Platform intelligence</span><h1>Analytics</h1><p>Understand what happened over time and investigate platform activity.</p></div></header>
-    <section className="analytics-grid"><ChartCard title="Forms by Status" subtitle="Current lifecycle distribution"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data.forms_by_status} dataKey="value" nameKey="name" innerRadius={62} outerRadius={92} paddingAngle={4}>{data.forms_by_status.map((_,i)=><Cell key={i} fill={COLORS[i]}/>)}</Pie><Tooltip/><Legend/></PieChart></ResponsiveContainer></ChartCard><ChartCard title="Users by Role" subtitle="Access-level distribution"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.users_by_role} layout="vertical" margin={{left:16}}><CartesianGrid strokeDasharray="3 3" horizontal={false}/><XAxis type="number" allowDecimals={false}/><YAxis dataKey="name" type="category" width={88}/><Tooltip/><Bar dataKey="value" radius={[0,8,8,0]}>{data.users_by_role.map((_,i)=><Cell key={i} fill={roleColors[i]}/>)}</Bar></BarChart></ResponsiveContainer></ChartCard><ChartCard title="Responses Over Time" subtitle="Submission volume over the last 14 days"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data.responses_over_time}><defs><linearGradient id="responseGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#635bff" stopOpacity={.35}/><stop offset="95%" stopColor="#635bff" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" vertical={false}/><XAxis dataKey="date" tick={{fontSize:11}}/><YAxis allowDecimals={false}/><Tooltip/><Area type="monotone" dataKey="responses" stroke="#635bff" strokeWidth={3} fill="url(#responseGradient)"/></AreaChart></ResponsiveContainer></ChartCard><ChartCard title="Forms Created Over Time" subtitle="New forms over the last 14 days"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.forms_over_time}><CartesianGrid strokeDasharray="3 3" vertical={false}/><XAxis dataKey="date" tick={{fontSize:11}}/><YAxis allowDecimals={false}/><Tooltip/><Bar dataKey="forms" fill="#06b6d4" radius={[7,7,0,0]}/></BarChart></ResponsiveContainer></ChartCard></section>
-    <section className="analytics-activity-section" id="activity"><div className="activity-section-header"><div><span className="eyebrow">Operational history</span><h2>Recent Activity Timeline</h2><p>Search and investigate the complete audit trail.</p></div><span className="count-pill">{activity.total} events</span></div>
-      <div className="activity-controls"><label className="activity-search"><Search/><input value={controls.search} onChange={e=>update("search",e.target.value)} placeholder="Search action, form ID, user, or entity…" aria-label="Search activity"/></label><select value={controls.action} onChange={e=>update("action",e.target.value)} aria-label="Filter activity type">{filters.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select><select value={controls.sort} onChange={e=>update("sort",e.target.value)} aria-label="Sort activity"><option value="desc">Newest first</option><option value="asc">Oldest first</option></select></div>
-      <div className="activity-log-card">{activityLoading?[1,2,3,4,5].map(i=><div className="skeleton activity-row-skeleton" key={i}/>):activity.items.length?activity.items.map(item=>{const {Icon,label,tone}=activityMeta(item.action);const exact=new Date(item.created_at).toLocaleString();return <article className="activity-log-row" key={item.id}><span className={`activity-type-icon ${tone}`}><Icon/></span><div className="activity-log-copy"><div><strong>{item.action.replaceAll("."," ")}</strong><span className={`activity-type-badge ${tone}`}>{label}</span></div><p>By {item.user_name} · {item.entity_type}{item.entity_id?` #${item.entity_id}`:""}</p></div><div className="activity-time"><time title={exact}>{relativeTime(item.created_at)}</time><small>{exact}</small></div></article>}):<div className="dashboard-empty"><Activity/><h2>No activity found</h2><p>Try a different search or filter.</p></div>}</div>
-      {activity.total>25&&<nav className="activity-pagination" aria-label="Activity pagination"><button disabled={page===1} onClick={()=>setPage(p=>p-1)}><ChevronLeft/> Previous</button><span>Page {page} of {pages}</span><button disabled={page===pages} onClick={()=>setPage(p=>p+1)}>Next <ChevronRight/></button></nav>}
-    </section>
-  </main>
+export default function AdminAnalytics() {
+  const { t } = useTranslation();
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const toast = useToast();
+  const printRef = useRef();
+
+  useEffect(() => {
+    API.get("/dashboard/admin")
+      .then(r => setData(r.data))
+      .catch(e => toast.error(apiMessage(e, "Unable to load analytics")))
+      .finally(() => setLoading(false));
+  }, [toast]);
+
+  const handleExportCSV = () => {
+    if (!data) return;
+    const csvContent = "data:text/csv;charset=utf-8," + 
+      "Form Title,Responses\n" + 
+      data.responses_by_form.map(e => `${e.name},${e.value}`).join("\n");
+    
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "admin_analytics_export.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success("CSV Export successful!");
+  };
+
+  const handleExportPDF = () => {
+    window.print();
+  };
+
+  if (loading) {
+    return (
+      <div className="dashboard-loading" style={{ padding: 40, display: 'flex', justifyContent: 'center' }}>
+        <div className="btn-spinner" style={{ width: 40, height: 40, borderWidth: 3 }} />
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  return (
+    <div className="dashboard-page" style={{ paddingBottom: 60, display: 'flex', flexDirection: 'column', gap: 32 }} ref={printRef}>
+      
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+        <div>
+          <h1 style={{ fontSize: 28, fontWeight: 800, color: 'var(--text-primary)', margin: '0 0 8px 0', letterSpacing: '-0.02em' }}>{t('ui.platform_analytics', `Platform Analytics`)}</h1>
+          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: 15 }}>{t('ui.comprehensive_statistics_across_all_form', `Comprehensive statistics across all forms and users.`)}</p>
+        </div>
+        <div style={{ display: 'flex', gap: 12 }}>
+          <button className="btn btn-secondary" onClick={handleExportCSV}>
+            <Download size={16} />{t('ui.export_csv', `Export CSV`)}</button>
+          <button className="btn btn-primary" onClick={handleExportPDF}>
+            <Download size={16} />{t('ui.export_pdf', `Export PDF`)}</button>
+        </div>
+      </div>
+
+      <div className="grid-12" style={{ gap: 24 }}>
+        
+        {/* Submission Trend */}
+        <div className="col-span-8">
+          <Card style={{ height: '100%', boxShadow: 'var(--shadow-sm)' }}>
+            <CardHeader title={t('ui.submission_trend', `Submission Trend`)} subtitle="Daily response volume (30 days)" icon={Activity} />
+            <CardBody style={{ padding: '0 24px 24px' }}>
+              <div style={{ width: '100%', height: 320 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={data.submission_trend} margin={{ top: 20, right: 20, bottom: 0, left: -20 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border-subtle)" />
+                    <XAxis dataKey="date" tick={{ fontSize: 12, fill: 'var(--text-tertiary)' }} axisLine={false} tickLine={false} minTickGap={20} />
+                    <YAxis tick={{ fontSize: 12, fill: 'var(--text-tertiary)' }} axisLine={false} tickLine={false} />
+                    <Tooltip contentStyle={{ borderRadius: 12, border: 'none', boxShadow: 'var(--shadow-lg)' }} />
+                    <Line type="monotone" dataKey="responses" stroke="var(--brand-500)" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+        
+        {/* Forms vs Responses */}
+        <div className="col-span-4">
+          <Card style={{ height: '100%', boxShadow: 'var(--shadow-sm)' }}>
+            <CardHeader title={t('ui.forms_vs_responses', `Forms vs Responses`)} subtitle="Distribution across active forms" icon={BarChart3} />
+            <CardBody style={{ padding: '0 24px 24px' }}>
+              <div style={{ width: '100%', height: 320 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={data.responses_by_form.slice(0, 5)} layout="vertical" margin={{ top: 20, right: 20, bottom: 0, left: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border-subtle)" />
+                    <XAxis type="number" tick={{ fontSize: 12, fill: 'var(--text-tertiary)' }} axisLine={false} tickLine={false} />
+                    <YAxis dataKey="name" type="category" width={80} tick={{ fontSize: 12, fill: 'var(--text-primary)' }} axisLine={false} tickLine={false} tickFormatter={(v) => v.substring(0, 10)} />
+                    <Tooltip cursor={{ fill: 'var(--gray-50)' }} contentStyle={{ borderRadius: 12, border: 'none', boxShadow: 'var(--shadow-lg)' }} />
+                    <Bar dataKey="value" barSize={20} fill="var(--info-500)" radius={[0, 4, 4, 0]} name="Responses" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+      </div>
+
+      <div className="grid-12" style={{ gap: 24 }}>
+        
+        {/* Top Performing Forms */}
+        <div className="col-span-6">
+          <Card style={{ height: '100%', boxShadow: 'var(--shadow-sm)' }}>
+            <CardHeader title={t('ui.top_performing_forms', `Top Performing Forms`)} subtitle="Highest response volumes" icon={FileText} />
+            <CardBody noPadding>
+              <Table>
+                <TableHeader headers={["Form Title", "Total Responses", "Published Date"]} />
+                <TableBody>
+                  {data.latest_published_forms.slice(0, 5).map(f => (
+                    <TableRow key={f.id}>
+                      <TableCell><strong style={{ color: 'var(--text-primary)' }}>{f.title}</strong></TableCell>
+                      <TableCell>
+                        <span style={{ fontWeight: 600, color: 'var(--brand-600)', background: 'var(--brand-50)', padding: '2px 8px', borderRadius: 999 }}>{compact.format(f.responses)}</span>
+                      </TableCell>
+                      <TableCell className="text-small">{new Date(f.published_at).toLocaleDateString()}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardBody>
+          </Card>
+        </div>
+
+        {/* Most Active Users */}
+        <div className="col-span-6">
+          <Card style={{ height: '100%', boxShadow: 'var(--shadow-sm)' }}>
+            <CardHeader title={t('ui.most_active_users', `Most Active Users`)} subtitle="Top creators by submission volume" icon={Users} />
+            <CardBody noPadding>
+              <Table>
+                <TableHeader headers={["User", "Forms Created", "Total Responses"]} />
+                <TableBody>
+                  {data.top_creators.map(u => (
+                    <TableRow key={u.id}>
+                      <TableCell>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <strong style={{ color: 'var(--text-primary)' }}>{u.name}</strong>
+                          <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{u.email}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>{u.forms_count}</TableCell>
+                      <TableCell>
+                        <span style={{ fontWeight: 600, color: 'var(--success-600)', background: 'var(--success-50)', padding: '2px 8px', borderRadius: 999 }}>{compact.format(u.responses_count)}</span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardBody>
+          </Card>
+        </div>
+      </div>
+
+    </div>
+  );
 }

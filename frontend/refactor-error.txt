@@ -1,0 +1,51 @@
+Error: Command failed: "C:\Program Files\nodejs\node.exe" i18n-refactor.js
+file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:325
+    const error = new SyntaxError();
+                  ^
+
+SyntaxError: Unexpected token (1:4) - make sure this is an expression.
+> 1 | ({t('ui.application_crashed', `Application Crashed`)})
+    |     ^
+    at constructor (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:325:19)
+    at Parser.raise (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:6387:19)
+    at Parser.unexpected (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:6407:16)
+    at Parser.parseIdentifierName (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:8880:12)
+    at Parser.parseIdentifier (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:8854:23)
+    at Parser.parseBindingAtom (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:7246:17)
+    at Parser.parseMaybeDefault (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:7337:25)
+    at Parser.parseBindingElement (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:7321:23)
+    at Parser.parseBindingList (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:7282:24)
+    at Parser.parseFunctionParams (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:9971:24) {
+  code: 'BABEL_REPLACE_SOURCE_ERROR',
+  reasonCode: 'UnexpectedToken',
+  loc: Position { line: 1, column: 4, index: 4 },
+  pos: 4,
+  syntaxPlugin: undefined
+}
+
+Node.js v24.13.1
+\nSTDOUT:\n\nSTDERR:\nfile:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:325
+    const error = new SyntaxError();
+                  ^
+
+SyntaxError: Unexpected token (1:4) - make sure this is an expression.
+> 1 | ({t('ui.application_crashed', `Application Crashed`)})
+    |     ^
+    at constructor (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:325:19)
+    at Parser.raise (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:6387:19)
+    at Parser.unexpected (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:6407:16)
+    at Parser.parseIdentifierName (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:8880:12)
+    at Parser.parseIdentifier (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:8854:23)
+    at Parser.parseBindingAtom (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:7246:17)
+    at Parser.parseMaybeDefault (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:7337:25)
+    at Parser.parseBindingElement (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:7321:23)
+    at Parser.parseBindingList (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:7282:24)
+    at Parser.parseFunctionParams (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/node_modules/@babel/parser/lib/index.js:9971:24) {
+  code: 'BABEL_REPLACE_SOURCE_ERROR',
+  reasonCode: 'UnexpectedToken',
+  loc: Position { line: 1, column: 4, index: 4 },
+  pos: 4,
+  syntaxPlugin: undefined
+}
+
+Node.js v24.13.1

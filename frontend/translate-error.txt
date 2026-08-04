@@ -1,0 +1,29 @@
+Error: Command failed: "C:\Program Files\nodejs\node.exe" translate-locales.js
+<anonymous_script>:1
+﻿{
+^
+
+SyntaxError: Unexpected token '﻿', "﻿{
+  "side"... is not valid JSON
+    at JSON.parse (<anonymous>)
+    at processFile (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/translate-locales.js:93:27)
+    at file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/translate-locales.js:111:3
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.13.1
+\nSTDOUT:\n\nSTDERR:\n<anonymous_script>:1
+﻿{
+^
+
+SyntaxError: Unexpected token '﻿', "﻿{
+  "side"... is not valid JSON
+    at JSON.parse (<anonymous>)
+    at processFile (file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/translate-locales.js:93:27)
+    at file:///C:/Users/Subiksha/OneDrive/Documents/lowcode-form-platform/frontend/translate-locales.js:111:3
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.13.1
